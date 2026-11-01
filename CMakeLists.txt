@@ -44,6 +44,13 @@ if(NOT WIN32)
     endif()
 endif()
 
+if(MSVC)
+    # Debug information for Release builds (embedded in the objects, PDB next to the binaries)
+    # so that crash reports and the test crash handler show symbolic stack traces.
+    add_compile_options($<$<CONFIG:Release>:/Z7>)
+    add_link_options($<$<CONFIG:Release>:/DEBUG> $<$<CONFIG:Release>:/OPT:REF> $<$<CONFIG:Release>:/OPT:ICF>)
+endif()
+
 # Native editing component (Scintilla + Lexilla, see third_party/CMakeLists.txt).
 add_subdirectory(third_party)
 

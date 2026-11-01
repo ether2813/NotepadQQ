@@ -52,10 +52,16 @@ NppDockManager::NppDockManager(QMainWindow* window, HWND nppHandle, QObject* par
 NppDockManager::~NppDockManager()
 {
     for (Panel& panel : m_panels) {
-        if (panel.dock && panel.client && IsWindow(panel.client)) {
-            // Give the dialog back to Notepad++'s window so that the plugin can destroy it.
-            SetParent(panel.client, m_nppHandle);
+        if (panel.dock) {
+            // Let Qt release the foreign window first (QWindowContainer owns its QWindow)...
+            panel.dock->disconnect(this);
+            delete panel.dock.data();
+        }
+        // ...then give the dialog back to Notepad++'s window, hidden, so that the plugin can
+        // destroy it as it would in Notepad++.
+        if (panel.client && IsWindow(panel.client)) {
             ShowWindow(panel.client, SW_HIDE);
+            SetParent(panel.client, m_nppHandle);
         }
     }
 }
