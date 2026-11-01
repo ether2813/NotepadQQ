@@ -219,6 +219,17 @@ void NppPluginHostTest::dockingPanelIsHosted()
     QVERIFY(client != nullptr);
     QCOMPARE(SendMessageW(m_npp, NPPM_DMMHIDE, 0, reinterpret_cast<LPARAM>(client)), TRUE);
     QVERIFY(!dock->isVisible());
+
+    // Embedding the panel makes Qt re-create native windows: the Scintilla handles given to
+    // plugins must survive it and keep working.
+    for (int view = 0; view < 2; ++view) {
+        HWND sci = NppPluginManager::instance()->scintillaHandle(view);
+        QVERIFY(IsWindow(sci));
+        QCOMPARE(static_cast<void*>(sci), m_window->topEditorContainer()->scintillaView(view)->nativeHandle());
+    }
+    EditorNS::Editor* editor = m_window->currentEditor();
+    HWND mainSci = NppPluginManager::instance()->scintillaHandle(0);
+    QCOMPARE(static_cast<sptr_t>(SendMessageW(mainSci, SCI_GETLENGTH, 0, 0)), editor->sci(SCI_GETLENGTH));
 }
 
 QTEST_MAIN(NppPluginHostTest)

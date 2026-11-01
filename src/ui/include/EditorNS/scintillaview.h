@@ -7,6 +7,7 @@
 #include <QPointer>
 #include <QUrl>
 #include <QWidget>
+#include <QWindow>
 
 #include <Scintilla.h>
 
@@ -88,6 +89,7 @@ protected:
     void resizeEvent(QResizeEvent* ev) override;
     void focusInEvent(QFocusEvent* ev) override;
     bool event(QEvent* ev) override;
+    bool eventFilter(QObject* watched, QEvent* ev) override;
 #ifdef Q_OS_WIN
     bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
     QPaintEngine* paintEngine() const override { return nullptr; }
@@ -95,12 +97,16 @@ protected:
 
 private:
     void syncGeometry();
+    void park();
+    void unpark();
+    void hookHostWindow();
 
 #ifdef Q_OS_WIN
     void* m_hwnd = nullptr;
     sptr_t (*m_directFn)(sptr_t, unsigned int, uptr_t, sptr_t) = nullptr;
     sptr_t m_directPtr = 0;
     bool m_parked = false;
+    QPointer<QWindow> m_hostWindow;
 #else
     ScintillaEditBase* m_edit = nullptr;
 #endif

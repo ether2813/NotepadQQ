@@ -3,7 +3,9 @@
 #include <QApplication>
 #include <QEvent>
 #include <QFocusEvent>
+#include <QPlatformSurfaceEvent>
 #include <QResizeEvent>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #ifdef Q_OS_WIN
@@ -198,6 +200,7 @@ ScintillaView::ScintillaView(QWidget* parent)
 
     viewRegistry().append(this);
     syncGeometry();
+    hookHostWindow();
 }
 
 ScintillaView::~ScintillaView()
@@ -259,24 +262,70 @@ void ScintillaView::focusInEvent(QFocusEvent* ev)
         SetFocus(static_cast<HWND>(m_hwnd));
 }
 
+void ScintillaView::park()
+{
+    if (!m_hwnd || m_parked)
+        return;
+    ShowWindow(static_cast<HWND>(m_hwnd), SW_HIDE);
+    SetParent(static_cast<HWND>(m_hwnd), sinkWindow());
+    m_parked = true;
+}
+
+void ScintillaView::unpark()
+{
+    if (!m_hwnd || !testAttribute(Qt::WA_WState_Created))
+        return;
+    HWND host = reinterpret_cast<HWND>(winId());
+    if (!host)
+        return;
+    if (GetParent(static_cast<HWND>(m_hwnd)) != host)
+        SetParent(static_cast<HWND>(m_hwnd), host);
+    m_parked = false;
+    ShowWindow(static_cast<HWND>(m_hwnd), SW_SHOWNA);
+    syncGeometry();
+    hookHostWindow();
+}
+
+/**
+ * Qt may destroy and re-create the host's native window at any time (reparenting, a sibling
+ * becoming native, ...). Destroying it would destroy the Scintilla child window too, and with it
+ * the handle given to Notepad++ plugins. The host QWindow announces the destruction of its
+ * native surface, which is when the Scintilla window is moved to a safe parking window.
+ */
+void ScintillaView::hookHostWindow()
+{
+    QWindow* window = windowHandle();
+    if (window == m_hostWindow)
+        return;
+    if (m_hostWindow)
+        m_hostWindow->removeEventFilter(this);
+    m_hostWindow = window;
+    if (m_hostWindow)
+        m_hostWindow->installEventFilter(this);
+}
+
+bool ScintillaView::eventFilter(QObject* watched, QEvent* ev)
+{
+    if (watched == m_hostWindow && ev->type() == QEvent::PlatformSurface) {
+        const auto type = static_cast<QPlatformSurfaceEvent*>(ev)->surfaceEventType();
+        if (type == QPlatformSurfaceEvent::SurfaceAboutToBeDestroyed)
+            park();
+        else if (type == QPlatformSurfaceEvent::SurfaceCreated)
+            QTimer::singleShot(0, this, [this] { unpark(); });
+    }
+    return QWidget::eventFilter(watched, ev);
+}
+
 bool ScintillaView::event(QEvent* ev)
 {
     switch (ev->type()) {
     case QEvent::ParentAboutToChange:
-        // Qt may recreate the host's native window while reparenting. Move the Scintilla HWND
-        // to a safe place first so that it (and the handle given to plugins) survives.
-        if (m_hwnd) {
-            SetParent(static_cast<HWND>(m_hwnd), sinkWindow());
-            m_parked = true;
-        }
+        park();
         break;
     case QEvent::ParentChange:
     case QEvent::WinIdChange:
-        if (m_hwnd && testAttribute(Qt::WA_WState_Created)) {
-            SetParent(static_cast<HWND>(m_hwnd), reinterpret_cast<HWND>(winId()));
-            m_parked = false;
-            syncGeometry();
-        }
+    case QEvent::Show:
+        unpark();
         break;
     default:
         break;
@@ -414,6 +463,9 @@ void ScintillaView::focusInEvent(QFocusEvent* ev)
 
 bool ScintillaView::event(QEvent* ev)
 { return QWidget::event(ev); }
+
+bool ScintillaView::eventFilter(QObject* watched, QEvent* ev)
+{ return QWidget::eventFilter(watched, ev); }
 
 #endif
 
