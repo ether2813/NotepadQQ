@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.notepadqq.Notepadqq</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>GPL-3.0</project_license>
+  <name>Notepadqq</name>
+  <summary>An advanced text editor</summary>
+  <description>
+    <p>Notepadqq is an advanced text editor designed to make life easier for developers.</p>
+    <p>It includes real-time syntax highlighting for over one hundred languages, regular expression searches, and text manipulation with multiple cursors.</p>
+  </description>
+  <launchable type="desktop-id">notepadqq.desktop</launchable>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://notepadqq.com/s/images/snapshot1.png</image>
+    </screenshot>
+  </screenshots>
+  <developer id="com.notepadqq">
+    <name>The Notepadqq Team</name>
+  </developer>
+  <url type="homepage">https://notepadqq.com</url>
+  <url type="bugtracker">https://github.com/notepadqq/notepadqq/issues</url>
+  <url type="faq">https://notepadqq.com/wp/faq</url>
+  <url type="help">https://github.com/notepadqq/notepadqq/wiki</url>
+  <url type="translate">https://github.com/notepadqq/notepadqq/wiki/Translate-Notepadqq</url>
+  <content_rating type="oars-1.0">
+    <content_attribute id="social-info">moderate</content_attribute>
+  </content_rating>
+  <provides>
+    <binary>notepadqq</binary>
+  </provides>
+  <releases>
+    <release version="2.1.1" date="2026-07-04"/>
+    <release version="2.1.0" date="2026-07-02"/>
+    <release version="2.0.0~beta" date="2019-10-12" type="development"/>
+    <release version="1.9.99" date="2019-08-30" type="development"/>
+    <release version="1.4.8" date="2018-05-10"/>
+  </releases>
+</component>
