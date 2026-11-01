@@ -57,6 +57,12 @@ void NppPluginManager::attach(MainWindow* window)
 NppPluginManager* NppPluginManager::instance()
 { return s_instance; }
 
+void NppPluginManager::detach(MainWindow* window)
+{
+    if (s_instance && s_instance->m_window == window)
+        delete s_instance;
+}
+
 NppPluginManager::NppPluginManager(MainWindow* window)
     : QObject(window)
     , m_window(window)
@@ -99,8 +105,22 @@ NppPluginManager::NppPluginManager(MainWindow* window)
 
 NppPluginManager::~NppPluginManager()
 {
-    if (!m_shuttingDown)
+    // Stop reacting to UI signals before anything else: the window is being torn down.
+    m_ready = false;
+    m_window->removeEventFilter(this);
+    m_window->topEditorContainer()->disconnect(this);
+    m_window->getDocEngine()->disconnect(this);
+    EditorNS::EditorEvents::instance()->disconnect(this);
+    for (const auto& view : m_connectedViews) {
+        if (view)
+            view->disconnect(this);
+    }
+
+    // Plugins typically save their settings here, so NPPM_* messages are still answered.
+    if (!m_shuttingDown) {
         notifyPlugins(NPPN_SHUTDOWN);
+        m_shuttingDown = true;
+    }
     if (m_hwnd && g_previousWndProc)
         SetWindowLongPtrW(m_hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(g_previousWndProc));
     if (m_shadowMainMenu)
@@ -524,8 +544,8 @@ void NppPluginManager::connectApplicationSignals()
 
     connect(qApp, &QCoreApplication::aboutToQuit, this, [this] {
         if (!m_shuttingDown) {
-            m_shuttingDown = true;
             notifyPlugins(NPPN_SHUTDOWN);
+            m_shuttingDown = true;
         }
     });
 }

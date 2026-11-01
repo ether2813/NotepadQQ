@@ -4,6 +4,7 @@
 #include "EditorNS/editor.h"
 #include "editortabwidget.h"
 
+#include <QPointer>
 #include <QSplitter>
 #include <QWheelEvent>
 #include <QtPromise>
@@ -105,7 +106,7 @@ public:
     void disconnectAllTabWidgets();
 
 private:
-    EditorTabWidget* m_currentTabWidget;
+    QPointer<EditorTabWidget> m_currentTabWidget;
     QPointer<EditorNS::ScintillaView> m_views[2];
 
 signals:

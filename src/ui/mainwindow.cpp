@@ -146,6 +146,10 @@ MainWindow::MainWindow(const QStringList& arguments, QWidget* parent)
 
 MainWindow::~MainWindow()
 {
+#ifdef NQQ_NPP_PLUGINS
+    // Shut the plugin host down while the editors, views and DocEngine are still intact.
+    NppPluginManager::detach(this);
+#endif
     MainWindow::m_instances.removeAll(this);
 
     delete m_editorUiController;

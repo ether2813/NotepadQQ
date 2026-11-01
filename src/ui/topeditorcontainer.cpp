@@ -6,7 +6,7 @@
 
 TopEditorContainer::TopEditorContainer(QWidget* parent)
     : QSplitter(parent)
-    , m_currentTabWidget(0)
+    , m_currentTabWidget(nullptr)
 {
     setOrientation(Qt::Horizontal);
 
@@ -22,6 +22,12 @@ TopEditorContainer::TopEditorContainer(QWidget* parent)
 
 TopEditorContainer::~TopEditorContainer()
 {
+    // The panes are destroyed by ~QWidget, after this object's members. Make sure none of their
+    // signals (currentChanged, destroyed, ...) reaches this half-destroyed container.
+    for (int i = 0; i < count(); i++) {
+        if (QWidget* w = widget(i))
+            w->disconnect(this);
+    }
     for (int i = 0; i < count(); i++) {
         if (EditorTabWidget* tw = tabWidget(i))
             tw->releaseScintillaView();
@@ -66,6 +72,20 @@ EditorTabWidget* TopEditorContainer::addTabWidget()
             break;
         }
     }
+
+    // Never keep a dangling "current" pane: fall back to another one when it is destroyed.
+    connect(tabWidget, &QObject::destroyed, this, [this](QObject* dying) {
+        if (m_currentTabWidget && m_currentTabWidget.data() != dying)
+            return;
+        m_currentTabWidget = nullptr;
+        for (int i = 0; i < count(); i++) {
+            if (widget(i) != dying) {
+                m_currentTabWidget = dynamic_cast<EditorTabWidget*>(widget(i));
+                if (m_currentTabWidget)
+                    break;
+            }
+        }
+    });
 
     // Detect tab switches
     connect(tabWidget, &EditorTabWidget::currentChanged, this, &TopEditorContainer::on_currentTabChanged);

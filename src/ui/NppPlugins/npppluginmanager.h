@@ -45,6 +45,11 @@ public:
     /** Creates the plugin manager for @p window if none exists yet, and loads the plugins. */
     static void attach(MainWindow* window);
     static NppPluginManager* instance();
+    /**
+     * Destroys the plugin manager if it is bound to @p window. Called at the very beginning of
+     * MainWindow's destructor, so that plugins are shut down while the UI is still complete.
+     */
+    static void detach(MainWindow* window);
 
     ~NppPluginManager() override;
 
