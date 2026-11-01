@@ -2,6 +2,9 @@
     <qresource prefix="icons/notepadqq">
 		<file alias="index.theme">icons/notepadqq/index.theme</file>
 
+		<file alias="tab/tab-close.svg">icons/notepadqq/tab/tab-close.svg</file>
+		<file alias="tab/tab-close-hover.svg">icons/notepadqq/tab/tab-close-hover.svg</file>
+		<file alias="tab/tab-close-pressed.svg">icons/notepadqq/tab/tab-close-pressed.svg</file>
 		<file alias="scalable/document-close.svg">icons/notepadqq/scalable/document-close.svg</file>
 		<file alias="scalable/document-close-all.svg">icons/notepadqq/scalable/document-close-all.svg</file>
 		<file alias="scalable/document-new.svg">icons/notepadqq/scalable/document-new.svg</file>

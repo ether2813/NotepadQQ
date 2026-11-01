@@ -28,7 +28,13 @@ EditorTabWidget::EditorTabWidget(QWidget* parent)
     this->tabBar()->setExpanding(true);
     this->setUsesScrollButtons(true);
 #else
-    QString style = QString("QTabBar::tab{min-width:100px; height:24px;}");
+    // The close button is orange, turns red while hovered and dark red while pressed.
+    const QString style = QStringLiteral(
+        "QTabBar::tab{min-width:100px; height:24px;}"
+        "QTabBar::close-button{image: url(:/icons/notepadqq/tab/tab-close.svg); subcontrol-position: right;"
+        " width: 16px; height: 16px; margin: 0px 2px;}"
+        "QTabBar::close-button:hover{image: url(:/icons/notepadqq/tab/tab-close-hover.svg);}"
+        "QTabBar::close-button:pressed{image: url(:/icons/notepadqq/tab/tab-close-pressed.svg);}");
     setStyleSheet(style);
 #endif
 }
