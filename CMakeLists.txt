@@ -434,6 +434,36 @@ if(NQQ_BUILD_TESTS)
         set_tests_properties(editor-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     endif()
 
+    if(WIN32 AND NQQ_ENABLE_NPP_PLUGINS)
+        # A real Notepad++ plugin DLL, loaded by the plugin host from <build dir>/plugins.
+        add_library(NqqTestPlugin SHARED src/ui-tests/npp-test-plugin/NqqTestPlugin.cpp)
+        target_include_directories(NqqTestPlugin PRIVATE src/ui/NppPlugins/npp third_party/scintilla/include)
+        target_compile_definitions(NqqTestPlugin PRIVATE UNICODE _UNICODE NOMINMAX)
+        target_link_libraries(NqqTestPlugin PRIVATE user32)
+        set_target_properties(NqqTestPlugin PROPERTIES
+            AUTOMOC OFF AUTOUIC OFF AUTORCC OFF
+            PREFIX ""
+            OUTPUT_NAME NqqTestPlugin
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/NqqTestPlugin"
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/NqqTestPlugin"
+        )
+
+        qt_add_executable(npp-plugin-tests
+            src/ui-tests/tst_npppluginhost.cpp
+            ${NQQ_UI_TEST_SOURCES}
+            ${NQQ_APP_HEADERS}
+            ${NQQ_APP_FORMS}
+            ${NQQ_GENERATED_ICONS_QRC}
+        )
+        set_target_properties(npp-plugin-tests PROPERTIES
+            AUTOUIC_SEARCH_PATHS "${NQQ_UI_DIR};${NQQ_UI_DIR}/Search;${NQQ_UI_DIR}/Extensions"
+        )
+        nqq_configure_target(npp-plugin-tests)
+        target_link_libraries(npp-plugin-tests PRIVATE Qt6::Test)
+        add_dependencies(npp-plugin-tests notepadqq_appdata NqqTestPlugin)
+        add_test(NAME npp-plugin-tests COMMAND npp-plugin-tests)
+    endif()
+
     qt_add_executable(cpp-correctness-tests
         src/ui-tests/tst_cppcorrectness.cpp
         src/ui/EditorNS/asyncrequesttracker.cpp
