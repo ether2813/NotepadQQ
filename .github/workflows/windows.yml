@@ -1,0 +1,125 @@
+name: Windows Build
+
+# Native Windows (x64, MSVC) build of Notepadqq with the Win32 Scintilla editor and the
+# Notepad++ plugin host. Produces a portable zip:
+#
+#   Notepadqq/
+#     notepadqq.exe        <- the application
+#     Qt6*.dll, platforms\ <- Qt runtime (windeployqt)
+#     appdata\             <- languages, Notepad++ langs/stylers/themes, extension tools
+#     plugins\             <- drop Notepad++ x64 plugins here (plugins\Name\Name.dll)
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_VERSION: '6.8.3'
+
+jobs:
+  build:
+    name: Windows / x64 / ${{ matrix.config }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Release]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: qt5compat qtwebsockets
+          cache: true
+
+      - name: Configure
+        shell: pwsh
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=${{ matrix.config }}
+          -DNQQ_BUILD_TESTS=ON
+          -DNQQ_ENABLE_NPP_PLUGINS=ON
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build build --parallel
+
+      - name: Test
+        shell: pwsh
+        run: ctest --test-dir build --output-on-failure --timeout 300
+
+      - name: Debug failing tests
+        if: failure()
+        shell: pwsh
+        run: |
+          $cdb = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $cdb) { Write-Host "cdb not available"; exit 0 }
+          foreach ($t in @("npp-plugin-tests", "editor-tests", "ui-tests")) {
+            Write-Host "===== $t under cdb ====="
+            & $cdb.FullName -lines -c "sxe av; g; .ecxr; kpn 60; q" "build\$t.exe" 2>&1 | Select-Object -Last 120
+          }
+
+      - name: Install
+        shell: pwsh
+        run: cmake --install build --prefix dist/Notepadqq
+
+      - name: Deploy Qt runtime
+        shell: pwsh
+        run: >
+          windeployqt --release --no-system-d3d-compiler --no-opengl-sw --no-quick-import
+          --compiler-runtime dist/Notepadqq/notepadqq.exe
+
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $exe = "dist/Notepadqq/notepadqq.exe"
+          $p = Start-Process -FilePath $exe -ArgumentList "--print-debug-info" -PassThru -Wait -NoNewWindow
+          if ($p.ExitCode -ne 0) { throw "notepadqq.exe --print-debug-info failed with exit code $($p.ExitCode)" }
+          if (-not (Test-Path "dist/Notepadqq/appdata/npp/langs.xml")) { throw "appdata is missing" }
+          if (-not (Test-Path "dist/Notepadqq/plugins/README.txt")) { throw "plugins folder is missing" }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "notepadqq-windows-x64"
+          if ("${{ github.ref_type }}" -eq "tag") { $name = "notepadqq-${{ github.ref_name }}-windows-x64" }
+          Compress-Archive -Path dist/Notepadqq -DestinationPath "dist/$name.zip"
+          echo "PACKAGE_NAME=$name" >> $env:GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE_NAME }}
+          path: dist/Notepadqq
+          if-no-files-found: error
+
+      - name: Publish release asset
+        if: github.event_name == 'release' || github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ env.PACKAGE_NAME }}.zip

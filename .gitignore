@@ -1,0 +1,24 @@
+# Temp files
+*~
+.directory
+*.kate-swp
+*.swp
+.DS_Store
+Thumbs.db
+.qtc_clangd
+
+# Backup files
+*.bak
+*.old
+
+build-notepadqq-Desktop*
+
+/build
+/src/ui/ui.pro.user
+/src/ui/ui.pro.user.*
+/notepadqq.pro.user
+
+/.qmake.stash
+/src/ui-tests/moc_predefs.h
+
+/src/translations/*.qm

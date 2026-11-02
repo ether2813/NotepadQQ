@@ -1,0 +1,354 @@
+#include "include/topeditorcontainer.h"
+
+#include "include/EditorNS/scintillaview.h"
+
+#include <QTabBar>
+
+TopEditorContainer::TopEditorContainer(QWidget* parent)
+    : QSplitter(parent)
+    , m_currentTabWidget(nullptr)
+{
+    setOrientation(Qt::Horizontal);
+
+    // Both views are created up-front so that their handles are stable for the whole
+    // lifetime of the window (Notepad++ plugins receive them once, at load time).
+    m_views[0] = new EditorNS::ScintillaView(nullptr);
+    m_views[1] = new EditorNS::ScintillaView(nullptr);
+
+    // Always add a first tabWidget to the container.
+    // This ensures m_currentTagWidget is never null
+    m_currentTabWidget = addTabWidget();
+}
+
+TopEditorContainer::~TopEditorContainer()
+{
+    // The panes are destroyed by ~QWidget, after this object's members. Make sure none of their
+    // signals (currentChanged, destroyed, ...) reaches this half-destroyed container.
+    for (int i = 0; i < count(); i++) {
+        if (QWidget* w = widget(i))
+            w->disconnect(this);
+    }
+    for (int i = 0; i < count(); i++) {
+        if (EditorTabWidget* tw = tabWidget(i))
+            tw->releaseScintillaView();
+    }
+    for (auto& view : m_views)
+        delete view.data();
+}
+
+EditorNS::ScintillaView* TopEditorContainer::scintillaView(int index) const
+{
+    if (index < 0 || index > 1)
+        return nullptr;
+    return m_views[index];
+}
+
+int TopEditorContainer::scintillaViewIndex(EditorTabWidget* tabWidget) const
+{
+    if (!tabWidget)
+        return -1;
+    for (int i = 0; i < 2; i++) {
+        if (m_views[i] && tabWidget->scintillaView() == m_views[i])
+            return i;
+    }
+    return -1;
+}
+
+EditorTabWidget* TopEditorContainer::addTabWidget()
+{
+    EditorTabWidget* tabWidget = new EditorTabWidget(this);
+    addWidget(tabWidget);
+
+    // Give the new pane the first view that is not used by another pane.
+    for (auto& view : m_views) {
+        bool used = false;
+        for (int i = 0; i < count(); i++) {
+            EditorTabWidget* other = this->tabWidget(i);
+            if (other && other != tabWidget && other->scintillaView() == view)
+                used = true;
+        }
+        if (!used && view) {
+            tabWidget->setScintillaView(view);
+            break;
+        }
+    }
+
+    // Never keep a dangling "current" pane: fall back to another one when it is destroyed.
+    connect(tabWidget, &QObject::destroyed, this, [this](QObject* dying) {
+        if (m_currentTabWidget && m_currentTabWidget.data() != dying)
+            return;
+        m_currentTabWidget = nullptr;
+        for (int i = 0; i < count(); i++) {
+            if (widget(i) != dying) {
+                m_currentTabWidget = dynamic_cast<EditorTabWidget*>(widget(i));
+                if (m_currentTabWidget)
+                    break;
+            }
+        }
+    });
+
+    // Detect tab switches
+    connect(tabWidget, &EditorTabWidget::currentChanged, this, &TopEditorContainer::on_currentTabChanged);
+    connect(tabWidget, &EditorTabWidget::gotFocus, this, &TopEditorContainer::on_currentTabWidgetChanged);
+    connect(tabWidget, &EditorTabWidget::tabBarClicked, this, &TopEditorContainer::on_currentTabWidgetChanged);
+
+    connect(tabWidget,
+        &EditorTabWidget::customContextMenuRequested,
+        this,
+        &TopEditorContainer::on_customContextMenuRequested);
+    connect(tabWidget, &EditorTabWidget::tabCloseRequested, this, &TopEditorContainer::on_tabCloseRequested);
+    connect(tabWidget, &EditorTabWidget::editorAdded, this, &TopEditorContainer::on_editorAdded);
+    connect(tabWidget, &EditorTabWidget::editorMouseWheel, this, [=, this](int tab, QWheelEvent* ev) {
+        emit editorMouseWheel(tabWidget, tab, ev);
+    });
+    connect(tabWidget, &EditorTabWidget::tabBarDoubleClicked, this, [=, this](int index) {
+        emit tabBarDoubleClicked(tabWidget, index);
+    });
+
+    // Resize all panes to be equally big.
+    const int currentViewCount = count();
+    const int tabSize = contentsRect().width() / currentViewCount;
+
+    QList<int> sizes;
+    for (int i = 0; i < currentViewCount; ++i)
+        sizes << tabSize;
+
+    setSizes(sizes);
+
+    return tabWidget;
+}
+
+EditorTabWidget* TopEditorContainer::tabWidget(int index)
+{ return dynamic_cast<EditorTabWidget*>(widget(index)); }
+
+EditorTabWidget* TopEditorContainer::currentTabWidget()
+{ return m_currentTabWidget; }
+
+EditorTabWidget* TopEditorContainer::inactiveTabWidget(bool createIfNotExists)
+{
+    const int currentViewCount = count();
+
+    if (currentViewCount >= 2) {
+        // Two view panes are open. Pick the one not currently active.
+        int viewId = widget(1) == currentTabWidget() ? 0 : 1;
+        return tabWidget(viewId);
+    }
+
+    // Only one view pane is open.
+    if (createIfNotExists)
+        return addTabWidget();
+    else
+        return nullptr;
+}
+
+EditorTabWidget* TopEditorContainer::tabWidgetFromEditor(Editor* editor)
+{
+    for (int i = 0; i < count(); i++) {
+        if (tabWidget(i)->indexOf(editor) > -1)
+            return tabWidget(i);
+    }
+    return 0;
+}
+
+void TopEditorContainer::on_currentTabChanged(int index)
+{
+    EditorTabWidget* tabWidget = dynamic_cast<EditorTabWidget*>(sender());
+    if (!tabWidget)
+        return;
+
+    m_currentTabWidget = tabWidget;
+    emit currentTabChanged(tabWidget, index);
+    emit currentEditorChanged(tabWidget, index);
+}
+
+void TopEditorContainer::on_currentTabWidgetChanged()
+{
+    EditorTabWidget* tabWidget = dynamic_cast<EditorTabWidget*>(sender());
+    if (!tabWidget)
+        return;
+
+    if (m_currentTabWidget != tabWidget) {
+        m_currentTabWidget = tabWidget;
+        emit currentTabWidgetChanged(tabWidget);
+        emit currentEditorChanged(tabWidget, tabWidget->currentIndex());
+    }
+}
+
+void TopEditorContainer::on_customContextMenuRequested(QPoint point)
+{
+    EditorTabWidget* tabWidget = dynamic_cast<EditorTabWidget*>(sender());
+    if (!tabWidget)
+        return;
+
+    int index = tabWidget->tabBar()->tabAt(point);
+
+    if (index != -1) {
+        tabWidget->setFocus();
+        tabWidget->setCurrentIndex(index);
+
+        emit customTabContextMenuRequested(tabWidget->mapToGlobal(point), tabWidget, index);
+    }
+}
+
+void TopEditorContainer::on_tabCloseRequested(int index)
+{
+    EditorTabWidget* tabWidget = dynamic_cast<EditorTabWidget*>(sender());
+    if (!tabWidget)
+        return;
+
+    m_currentTabWidget = tabWidget;
+    emit tabCloseRequested(tabWidget, index);
+}
+
+void TopEditorContainer::on_editorAdded(int tab)
+{
+    EditorTabWidget* tabWidget = dynamic_cast<EditorTabWidget*>(sender());
+    if (!tabWidget)
+        return;
+
+    emit editorAdded(tabWidget, tab);
+}
+
+void TopEditorContainer::forEachEditor(std::function<bool(const int, const int, EditorTabWidget*, Editor*)> callback)
+{ forEachEditor(false, callback); }
+
+std::vector<Editor*> TopEditorContainer::getOpenEditors()
+{
+    std::vector<Editor*> editors;
+
+    for (int i = 0; i < count(); i++) {
+        EditorTabWidget* tabW = tabWidget(i);
+        for (int j = 0; j < tabW->count(); j++) {
+            editors.push_back(tabW->editor(j));
+        }
+    }
+
+    return editors;
+}
+
+int TopEditorContainer::getNumEditors()
+{
+    int total = 0;
+
+    for (int i = 0; i < count(); ++i)
+        total += tabWidget(i)->count();
+
+    return total;
+}
+
+void TopEditorContainer::disconnectAllTabWidgets()
+{
+    for (int i = 0; i < count(); ++i) {
+        tabWidget(i)->disconnect();
+    }
+}
+
+void TopEditorContainer::forEachEditor(bool backwardIndexes,
+    std::function<bool(const int tabWidgetId, const int editorId, EditorTabWidget* tabWidget, Editor* editor)> callback)
+{
+    if (backwardIndexes) {
+        for (int i = count() - 1; i >= 0; i--) {
+            EditorTabWidget* tabW = tabWidget(i);
+            for (int j = tabW->count() - 1; j >= 0; j--) {
+                bool ret = callback(i, j, tabW, tabW->editor(j));
+                if (ret == false)
+                    return;
+            }
+        }
+    } else {
+        for (int i = 0; i < count(); i++) {
+            EditorTabWidget* tabW = tabWidget(i);
+            for (int j = 0; j < tabW->count(); j++) {
+                bool ret = callback(i, j, tabW, tabW->editor(j));
+                if (ret == false)
+                    return;
+            }
+        }
+    }
+}
+
+QtPromise::QPromise<void> TopEditorContainer::forEachEditorAsync(bool backwardIndices,
+    std::function<void(const int tabWidgetId,
+        const int editorId,
+        EditorTabWidget* tabWidget,
+        Editor* editor,
+        std::function<void()> goOn,
+        std::function<void()> stop)> callback)
+{
+    return QtPromise::QPromise<void>([=, this](const auto& resolve, const auto&) {
+        if (backwardIndices) {
+            std::function<std::function<void()>(int, int)> iteration;
+            iteration = [&, this](int i, int j) {
+                return [=, this]() {
+                    if (i < 0) {
+                        resolve();
+                        return;
+                    }
+                    if (j < 0) {
+                        if (i - 1 >= 0) {
+                            iteration(i - 1, this->tabWidget(i - 1)->count() - 1);
+                        }
+                        return;
+                    }
+
+                    EditorTabWidget* tabW = this->tabWidget(i);
+                    callback(i, j, tabW, tabW->editor(j), iteration(i, j - 1), [resolve]() { resolve(); });
+                };
+            };
+
+            iteration(this->count() - 1, this->tabWidget(0)->count() - 1)();
+
+        } else {
+            std::function<std::function<void()>(int, int)> iteration;
+            iteration = [&, this](int i, int j) {
+                return [=, this]() {
+                    if (i >= this->count()) {
+                        resolve();
+                        return;
+                    }
+                    if (j >= this->tabWidget(i)->count()) {
+                        iteration(i + 1, 0);
+                        return;
+                    }
+
+                    EditorTabWidget* tabW = this->tabWidget(i);
+                    callback(i, j, tabW, tabW->editor(j), iteration(i, j + 1), [resolve]() { resolve(); });
+                };
+            };
+
+            iteration(0, 0)();
+        }
+    });
+}
+
+QtPromise::QPromise<void> TopEditorContainer::forEachEditorConcurrent(std::function<void(const int tabWidgetId,
+        const int editorId,
+        EditorTabWidget* tabWidget,
+        Editor* editor,
+        std::function<void()> done)> callback)
+{
+    return QtPromise::QPromise<void>([=, this](const auto& resolve, const auto&) {
+        // Collect all the indices we're going to use
+        std::vector<std::pair<int, int>> indices;
+        for (int i = 0; i < this->count(); i++) {
+            EditorTabWidget* tabW = this->tabWidget(i);
+            for (int j = 0; j < tabW->count(); j++) {
+                indices.push_back(std::make_pair(i, j));
+            }
+        }
+
+        // Counts the number of iterations
+        std::shared_ptr<int> cnt = std::make_shared<int>(indices.size());
+
+        for (const auto& idx : indices) {
+            int i = idx.first;
+            int j = idx.second;
+            callback(i, j, this->tabWidget(i), this->tabWidget(i)->editor(j), [cnt, resolve]() {
+                (*cnt)--;
+                if (*cnt == 0) {
+                    resolve();
+                }
+            });
+        }
+    });
+}
