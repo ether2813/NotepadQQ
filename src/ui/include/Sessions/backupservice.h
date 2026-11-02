@@ -57,6 +57,13 @@ public:
      */
     static void resume();
 
+    /**
+     * @brief Writes a snapshot of every window whose documents changed since the last one.
+     *        Called periodically, when the application loses focus and when Windows ends the
+     *        user session (shutdown, restart, log off).
+     */
+    static void executeBackup();
+
 private:
     static QTimer s_autosaveTimer;
     static bool s_autosaveEnabled;
@@ -82,12 +89,6 @@ private:
      * @brief s_backupWindowData contains the WindowData at the time of the last backup.
      */
     static std::set<WindowData> s_backupWindowData;
-
-    /**
-     * @brief executeAutosave Updates the data inside s_autosaveData and executes saveSession
-     *        for every open MainWindow that needs it.
-     */
-    static void executeBackup();
 
     /**
      * @brief writeBackup Writes a backup of the given MainWindow into a unique location inside the backupCache

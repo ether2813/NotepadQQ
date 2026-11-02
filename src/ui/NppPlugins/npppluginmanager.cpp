@@ -8,18 +8,23 @@
 #include "include/mainwindow.h"
 #include "include/topeditorcontainer.h"
 #include "nppdocking.h"
+#include "pefile.h"
 
 #include <QAction>
 #include <QApplication>
 #include <QDesktopServices>
 #include <QDir>
+#include <QDirIterator>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QImage>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPixmap>
+#include <QProcess>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QToolBar>
 #include <QUrl>
@@ -170,6 +175,14 @@ bool NppPluginManager::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam, LRE
     return false;
 }
 
+QStringList NppPluginManager::loadedPluginPaths() const
+{
+    QStringList paths;
+    for (const auto& p : m_plugins)
+        paths.append(p->path);
+    return paths;
+}
+
 QString NppPluginManager::pluginsHomePath()
 { return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("plugins")); }
 
@@ -189,16 +202,64 @@ HWND NppPluginManager::scintillaHandle(int view) const
 
 // ===================================================================== loading
 
+QStringList NppPluginManager::discoverPlugins(const QString& root, QStringList* problems)
+{
+    // Accepted layouts, in order of preference:
+    //   plugins\Name\Name.dll        (Notepad++ 7.6+ layout)
+    //   plugins\AnyFolder\*.dll      (any DLL exporting the Notepad++ plugin API)
+    //   plugins\Name.dll             (DLL dropped directly into the plugins folder)
+    // DLLs are inspected without being loaded, so dependencies shipped next to a plugin are
+    // never mistaken for plugins.
+    QStringList found;
+    auto consider = [&](const QString& dll, bool reportNonPlugins) {
+        const PeFileInfo pe = PeFileInfo::inspect(dll);
+        if (!pe.valid) {
+            if (reportNonPlugins)
+                problems->append(QStringLiteral("%1: %2").arg(QDir::toNativeSeparators(dll), pe.error));
+            return;
+        }
+        if (!pe.isNppPlugin()) {
+            if (reportNonPlugins)
+                problems->append(tr("%1: not a Notepad++ plugin (it does not export the plugin functions)")
+                        .arg(QDir::toNativeSeparators(dll)));
+            return;
+        }
+        if (!pe.matchesCurrentProcess()) {
+            problems->append(tr("%1: this is a %2 plugin, Notepadqq needs the 64-bit (x64) version of the plugin")
+                    .arg(QDir::toNativeSeparators(dll), pe.machineName()));
+            return;
+        }
+        found.append(dll);
+    };
+
+    const QDir rootDir(root);
+    for (const QFileInfo& dir : rootDir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
+        const QString preferred = QDir(dir.absoluteFilePath()).filePath(dir.fileName() + QStringLiteral(".dll"));
+        if (QFileInfo::exists(preferred)) {
+            consider(preferred, true);
+            continue;
+        }
+        const QFileInfoList dlls =
+            QDir(dir.absoluteFilePath()).entryInfoList(QStringList{QStringLiteral("*.dll")}, QDir::Files, QDir::Name);
+        const qsizetype before = found.size();
+        for (const QFileInfo& dll : dlls)
+            consider(dll.absoluteFilePath(), false);
+        if (found.size() == before && !dlls.isEmpty() && dir.fileName().compare("Config", Qt::CaseInsensitive) != 0)
+            problems->append(tr("%1: no Notepad++ plugin DLL found in this folder")
+                    .arg(QDir::toNativeSeparators(dir.absoluteFilePath())));
+    }
+    for (const QFileInfo& dll : rootDir.entryInfoList(QStringList{QStringLiteral("*.dll")}, QDir::Files, QDir::Name)) {
+        consider(dll.absoluteFilePath(), true);
+    }
+    return found;
+}
+
 void NppPluginManager::loadPlugins()
 {
     QStringList loadedNames;
     for (const QString& root : {pluginsHomePath(), userPluginsPath()}) {
-        const QFileInfoList dirs = QDir(root).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
-        for (const QFileInfo& dir : dirs) {
-            const QString dllName = dir.fileName() + QStringLiteral(".dll");
-            const QString dll = QDir(dir.absoluteFilePath()).filePath(dllName);
-            if (!QFileInfo::exists(dll))
-                continue;
+        for (const QString& dll : discoverPlugins(root, &m_loadErrors)) {
+            const QString dllName = QFileInfo(dll).fileName();
             if (loadedNames.contains(dllName, Qt::CaseInsensitive))
                 continue;
             QString error;
@@ -284,56 +345,11 @@ void NppPluginManager::buildMenus()
     }
     bar->insertMenu(before, m_pluginsMenu);
 
-    for (auto& pluginPtr : m_plugins) {
-        Plugin* plugin = pluginPtr.get();
-        QMenu* sub = m_pluginsMenu->addMenu(plugin->name);
-        plugin->menu = sub;
-        HMENU shadowSub = CreatePopupMenu();
-        const std::wstring wname = plugin->name.toStdWString();
-        AppendMenuW(m_shadowPluginMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(shadowSub), wname.c_str());
-
-        for (int i = 0; i < plugin->itemCount; ++i) {
-            FuncItem& item = plugin->items[i];
-            const int cmdId = m_nextCommandId++;
-            item._cmdID = cmdId;
-
-            Command command;
-            command.plugin = plugin;
-            command.index = i;
-
-            if (!item._pFunc || item._itemName[0] == L'\0') {
-                sub->addSeparator();
-                AppendMenuW(shadowSub, MF_SEPARATOR, 0, nullptr);
-                m_commands.insert(cmdId, command);
-                continue;
-            }
-
-            const QString text = QString::fromWCharArray(item._itemName);
-            QAction* action = sub->addAction(text);
-            action->setObjectName(QStringLiteral("nppCmd%1").arg(cmdId));
-            if (item._init2Check) {
-                action->setCheckable(true);
-                action->setChecked(true);
-            }
-            if (item._pShKey && item._pShKey->_key) {
-                const QKeySequence seq = EditorNS::NativeKeyRouter::sequenceFromVirtualKey(
-                    item._pShKey->_isCtrl, item._pShKey->_isAlt, item._pShKey->_isShift, item._pShKey->_key);
-                if (!seq.isEmpty()) {
-                    action->setShortcut(seq);
-                    action->setShortcutContext(Qt::WindowShortcut);
-                }
-            }
-            connect(action, &QAction::triggered, this, [this, cmdId] { runCommand(cmdId); });
-            command.action = action;
-            m_commands.insert(cmdId, command);
-
-            AppendMenuW(shadowSub, MF_STRING | (item._init2Check ? MF_CHECKED : 0), cmdId, item._itemName);
-        }
-        connect(sub, &QMenu::aboutToShow, this, &NppPluginManager::syncShadowMenuState);
-    }
-
-    if (!m_plugins.empty())
-        m_pluginsMenu->addSeparator();
+    // Fixed entries at the bottom; plugin sub-menus are inserted above m_pluginsSeparator.
+    m_pluginsSeparator = m_pluginsMenu->addSeparator();
+    QAction* install = m_pluginsMenu->addAction(tr("Install a Plugin..."));
+    install->setObjectName(QStringLiteral("actionNppInstallPlugin"));
+    connect(install, &QAction::triggered, this, [this] { installPluginInteractive(); });
     QAction* openFolder = m_pluginsMenu->addAction(tr("Open Plugins Folder..."));
     connect(openFolder, &QAction::triggered, this, [] {
         QDir().mkpath(pluginsHomePath());
@@ -343,16 +359,258 @@ void NppPluginManager::buildMenus()
     connect(about, &QAction::triggered, this, [this] {
         QStringList names;
         for (const auto& p : m_plugins)
-            names.append(QStringLiteral("%1 (%2)").arg(p->name, p->fileName));
-        QMessageBox::information(m_window,
-            tr("Notepad++ plugins"),
+            names.append(QStringLiteral("%1 (%2)").arg(p->name, QDir::toNativeSeparators(p->path)));
+        QString text =
             tr("Notepadqq implements the Notepad++ plugin interface (API level of Notepad++ 8.9.8).\n\n"
                "Plugin folder: %1\nUser plugin folder: %2\n\nLoaded plugins:\n%3")
                 .arg(QDir::toNativeSeparators(pluginsHomePath()),
                     QDir::toNativeSeparators(userPluginsPath()),
-                    names.isEmpty() ? tr("(none)") : names.join("\n")));
+                    names.isEmpty() ? tr("(none)") : names.join("\n"));
+        if (!m_loadErrors.isEmpty())
+            text += tr("\n\nProblems:\n%1").arg(m_loadErrors.join("\n"));
+        QMessageBox::information(m_window, tr("Notepad++ plugins"), text);
     });
     connect(m_pluginsMenu, &QMenu::aboutToShow, this, &NppPluginManager::syncShadowMenuState);
+
+    for (auto& pluginPtr : m_plugins)
+        addPluginMenu(pluginPtr.get());
+}
+
+void NppPluginManager::addPluginMenu(Plugin* plugin)
+{
+    auto* sub = new QMenu(plugin->name, m_pluginsMenu);
+    m_pluginsMenu->insertMenu(m_pluginsSeparator, sub);
+    plugin->menu = sub;
+    HMENU shadowSub = CreatePopupMenu();
+    const std::wstring wname = plugin->name.toStdWString();
+    AppendMenuW(m_shadowPluginMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(shadowSub), wname.c_str());
+
+    for (int i = 0; i < plugin->itemCount; ++i) {
+        FuncItem& item = plugin->items[i];
+        const int cmdId = m_nextCommandId++;
+        item._cmdID = cmdId;
+
+        Command command;
+        command.plugin = plugin;
+        command.index = i;
+
+        if (!item._pFunc || item._itemName[0] == L'\0') {
+            sub->addSeparator();
+            AppendMenuW(shadowSub, MF_SEPARATOR, 0, nullptr);
+            m_commands.insert(cmdId, command);
+            continue;
+        }
+
+        const QString text = QString::fromWCharArray(item._itemName);
+        QAction* action = sub->addAction(text);
+        action->setObjectName(QStringLiteral("nppCmd%1").arg(cmdId));
+        if (item._init2Check) {
+            action->setCheckable(true);
+            action->setChecked(true);
+        }
+        if (item._pShKey && item._pShKey->_key) {
+            const QKeySequence seq = EditorNS::NativeKeyRouter::sequenceFromVirtualKey(
+                item._pShKey->_isCtrl, item._pShKey->_isAlt, item._pShKey->_isShift, item._pShKey->_key);
+            if (!seq.isEmpty()) {
+                action->setShortcut(seq);
+                action->setShortcutContext(Qt::WindowShortcut);
+            }
+        }
+        connect(action, &QAction::triggered, this, [this, cmdId] { runCommand(cmdId); });
+        command.action = action;
+        m_commands.insert(cmdId, command);
+
+        AppendMenuW(shadowSub, MF_STRING | (item._init2Check ? MF_CHECKED : 0), cmdId, item._itemName);
+    }
+    connect(sub, &QMenu::aboutToShow, this, &NppPluginManager::syncShadowMenuState);
+}
+
+namespace {
+
+bool copyRecursively(const QString& from, const QString& to)
+{
+    QDir().mkpath(to);
+    const QDir src(from);
+    for (const QFileInfo& entry : src.entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden)) {
+        const QString target = QDir(to).filePath(entry.fileName());
+        if (entry.isDir()) {
+            if (!copyRecursively(entry.absoluteFilePath(), target))
+                return false;
+        } else {
+            QFile::remove(target);
+            if (!QFile::copy(entry.absoluteFilePath(), target))
+                return false;
+        }
+    }
+    return true;
+}
+
+bool isWritableDirectory(const QString& path)
+{
+    if (!QDir().mkpath(path))
+        return false;
+    QFile probe(QDir(path).filePath(QStringLiteral(".nqq-write-test")));
+    const bool ok = probe.open(QIODevice::WriteOnly);
+    probe.close();
+    probe.remove();
+    return ok;
+}
+
+bool extractZip(const QString& zip, const QString& destination)
+{
+    // tar.exe (bsdtar) ships with Windows 10 1803 and later and understands zip files.
+    QProcess tar;
+    tar.start(QStringLiteral("tar"),
+        {QStringLiteral("-xf"),
+            QDir::toNativeSeparators(zip),
+            QStringLiteral("-C"),
+            QDir::toNativeSeparators(destination)});
+    if (tar.waitForFinished(120000) && tar.exitStatus() == QProcess::NormalExit && tar.exitCode() == 0)
+        return true;
+    // Fallback: PowerShell.
+    QString escapedZip = QDir::toNativeSeparators(zip);
+    QString escapedDest = QDir::toNativeSeparators(destination);
+    escapedZip.replace(QLatin1Char('\''), QStringLiteral("''"));
+    escapedDest.replace(QLatin1Char('\''), QStringLiteral("''"));
+    const int rc = QProcess::execute(QStringLiteral("powershell"),
+        {QStringLiteral("-NoProfile"),
+            QStringLiteral("-NonInteractive"),
+            QStringLiteral("-Command"),
+            QStringLiteral("Expand-Archive -LiteralPath '%1' -DestinationPath '%2' -Force")
+                .arg(escapedZip, escapedDest)});
+    return rc == 0;
+}
+
+} // namespace
+
+void NppPluginManager::installPluginInteractive()
+{
+    const QString source = QFileDialog::getOpenFileName(m_window,
+        tr("Install a Notepad++ Plugin"),
+        QString(),
+        tr("Notepad++ plugins (*.dll *.zip);;Plugin DLL (*.dll);;Plugin package (*.zip);;All files (*)"));
+    if (source.isEmpty())
+        return;
+    QString name;
+    const QString error = installPlugin(source, &name);
+    if (error.isEmpty()) {
+        QMessageBox::information(m_window,
+            tr("Notepad++ plugins"),
+            tr("The plugin \"%1\" has been installed and loaded.\nIts commands are in the Plugins menu.").arg(name));
+    } else {
+        QMessageBox::warning(m_window, tr("Notepad++ plugins"), error);
+    }
+}
+
+QString NppPluginManager::installPlugin(const QString& source, QString* installedName)
+{
+    const QFileInfo src(source);
+    if (!src.exists())
+        return tr("%1 does not exist.").arg(QDir::toNativeSeparators(source));
+
+    QTemporaryDir extractDir;
+    QString dll;
+    QString folderToCopy; // empty: copy only the DLL
+
+    if (src.suffix().compare(QLatin1String("zip"), Qt::CaseInsensitive) == 0) {
+        if (!extractDir.isValid() || !extractZip(source, extractDir.path()))
+            return tr("The zip file could not be extracted.");
+        QStringList wrongArch;
+        QStringList candidates;
+        QDirIterator it(
+            extractDir.path(), QStringList{QStringLiteral("*.dll")}, QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString path = it.next();
+            const PeFileInfo pe = PeFileInfo::inspect(path);
+            if (!pe.valid || !pe.isNppPlugin())
+                continue;
+            if (pe.matchesCurrentProcess())
+                candidates.append(path);
+            else
+                wrongArch.append(QStringLiteral("%1 (%2)").arg(QFileInfo(path).fileName(), pe.machineName()));
+        }
+        if (candidates.isEmpty()) {
+            if (!wrongArch.isEmpty())
+                return tr(
+                    "This package only contains plugins for another architecture:\n%1\n\n"
+                    "Please download the 64-bit (x64) version of the plugin.")
+                    .arg(wrongArch.join("\n"));
+            return tr("No Notepad++ plugin was found in this zip file.");
+        }
+        // Prefer "Name\Name.dll" if a package contains several DLLs.
+        dll = candidates.first();
+        for (const QString& c : candidates) {
+            const QFileInfo fi(c);
+            if (fi.dir().dirName().compare(fi.completeBaseName(), Qt::CaseInsensitive) == 0) {
+                dll = c;
+                break;
+            }
+        }
+        folderToCopy = QFileInfo(dll).absolutePath();
+    } else {
+        const PeFileInfo pe = PeFileInfo::inspect(source);
+        if (!pe.valid)
+            return tr("%1 %2.").arg(src.fileName(), pe.error);
+        if (!pe.isNppPlugin())
+            return tr("%1 is not a Notepad++ plugin (it does not export the plugin functions).").arg(src.fileName());
+        if (!pe.matchesCurrentProcess())
+            return tr("%1 is a %2 plugin. Notepadqq needs the 64-bit (x64) version of the plugin.")
+                .arg(src.fileName(), pe.machineName());
+        dll = source;
+        // Extracted plugin packages look like "Name\Name.dll" + extra files: keep them together.
+        if (src.dir().dirName().compare(src.completeBaseName(), Qt::CaseInsensitive) == 0)
+            folderToCopy = src.absolutePath();
+    }
+
+    const QString baseName = QFileInfo(dll).completeBaseName();
+    const QString dllName = QFileInfo(dll).fileName();
+    for (const auto& p : m_plugins) {
+        if (p->fileName.compare(dllName, Qt::CaseInsensitive) == 0)
+            return tr("A plugin named %1 is already loaded (%2).\nRemove it and restart Notepadqq to replace it.")
+                .arg(dllName, QDir::toNativeSeparators(p->path));
+    }
+
+    const QString root = isWritableDirectory(pluginsHomePath()) ? pluginsHomePath() : userPluginsPath();
+    const QString destination = QDir(root).filePath(baseName);
+    if (!folderToCopy.isEmpty()) {
+        if (!copyRecursively(folderToCopy, destination))
+            return tr("The plugin could not be copied to %1.").arg(QDir::toNativeSeparators(destination));
+    } else {
+        QDir().mkpath(destination);
+        const QString target = QDir(destination).filePath(dllName);
+        QFile::remove(target);
+        if (!QFile::copy(dll, target))
+            return tr("The plugin could not be copied to %1.").arg(QDir::toNativeSeparators(destination));
+    }
+    // Normalise the DLL name to the Notepad++ layout (folder name == DLL name).
+    const QString installedDll = QDir(destination).filePath(baseName + QStringLiteral(".dll"));
+    if (!QFileInfo::exists(installedDll))
+        QFile::rename(QDir(destination).filePath(dllName), installedDll);
+
+    QString error;
+    if (!loadPlugin(installedDll, &error))
+        return tr("The plugin was copied to %1 but could not be loaded: %2")
+            .arg(QDir::toNativeSeparators(destination), error);
+
+    Plugin* plugin = m_plugins.back().get();
+    addPluginMenu(plugin);
+    // Bring the new plugin to the state the other plugins are in.
+    auto notifyOne = [this, plugin](UINT code, quintptr id) {
+        SCNotification scn;
+        memset(&scn, 0, sizeof(scn));
+        scn.nmhdr.hwndFrom = m_hwnd;
+        scn.nmhdr.code = code;
+        scn.nmhdr.idFrom = id;
+        guarded(plugin->name, [&] { plugin->beNotified(&scn); });
+    };
+    notifyOne(NPPN_TBMODIFICATION, 0);
+    notifyOne(NPPN_READY, 0);
+    if (Editor* editor = currentEditor())
+        notifyOne(NPPN_BUFFERACTIVATED, editor->bufferId());
+
+    if (installedName)
+        *installedName = plugin->name;
+    return QString();
 }
 
 /**

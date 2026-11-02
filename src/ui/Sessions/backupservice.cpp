@@ -118,15 +118,8 @@ bool BackupService::restoreFromBackup()
     if (dirs.isEmpty())
         return false;
 
-    auto ret = QMessageBox::question(nullptr,
-        "",
-        QObject::tr("Notepadqq was not closed properly. Do you want to recover unsaved changes?"),
-        QMessageBox::Yes | QMessageBox::No,
-        QMessageBox::Yes);
-
-    if (ret == QMessageBox::No)
-        return false;
-
+    // Like Notepad++, restore silently: after a shutdown, restart or crash the user simply finds
+    // all of their tabs again, including unsaved ones.
     for (const auto& dirInfo : dirs) {
         const auto sessPath = dirInfo.filePath() + "/window.xml";
 
@@ -160,6 +153,8 @@ void BackupService::enableAutosave(int intervalInSeconds)
 
             switch (state) {
             case Qt::ApplicationInactive:
+                // Take a snapshot right away: the user may now shut the computer down.
+                executeBackup();
                 s_autosaveTimer.stop();
                 break;
             case Qt::ApplicationActive:

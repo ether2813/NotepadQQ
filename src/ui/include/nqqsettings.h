@@ -89,10 +89,6 @@ public:
     NQQ_SETTING(WarnForDifferentIndentation, bool, true)
     NQQ_SETTING(ExitOnLastTabClose, bool, false)
 
-    NQQ_SETTING(CollectStatistics, bool, false)
-    NQQ_SETTING(LastStatisticTransmissionTime, qint64, 0)
-    NQQ_SETTING(StatisticsDialogShown, int, 0)
-
     NQQ_SETTING(WordWrap, bool, false)
     NQQ_SETTING(Zoom, qreal, 1.0)
 
@@ -102,7 +98,7 @@ public:
     NQQ_SETTING(ShowEOL, bool, false)
 
     NQQ_SETTING(RememberTabsOnExit, bool, true)
-    NQQ_SETTING(AutosaveInterval, int, 15) // In seconds
+    NQQ_SETTING(AutosaveInterval, int, 7) // In seconds (Notepad++ takes a session snapshot every 7 s)
     NQQ_SETTING(LastSelectedDir, QString, ".")
     NQQ_SETTING(LastSelectedSessionDir, QString, QString())
     NQQ_SETTING(RecentDocuments, QList<QVariant>, QList<QVariant>())

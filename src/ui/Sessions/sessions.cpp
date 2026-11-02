@@ -297,8 +297,9 @@ bool saveSession(DocEngine* docEngine, TopEditorContainer* editorContainer, QStr
 
         for (int j = 0; j < tabCount; j++) {
             auto editor = tabWidget->editor(j);
-            bool isClean = true;
-            editor->isCleanP().wait().tap([&](bool _isClean) { isClean = _isClean; });
+            // Read synchronously: a continuation attached with tap() after wait() would only run
+            // later from the event loop, and every tab would look clean (unsaved tabs were lost).
+            const bool isClean = editor->isClean();
             bool isOrphan = editor->filePath().isEmpty();
             IndentationMode indentInfo = editor->indentationMode();
 

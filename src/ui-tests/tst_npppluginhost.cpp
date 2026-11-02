@@ -2,6 +2,7 @@
 // src/ui-tests/npp-test-plugin is loaded from <build dir>/plugins by NppPluginManager.
 
 #include "NppPlugins/npppluginmanager.h"
+#include "NppPlugins/pefile.h"
 #include "include/EditorNS/editor.h"
 #include "include/EditorNS/scintillaview.h"
 #include "include/mainwindow.h"
@@ -31,6 +32,9 @@ private Q_SLOTS:
     void menuCheckAndAllocation();
     void interPluginMessage();
     void dockingPanelIsHosted();
+    void peInspectionRecognisesPlugins();
+    void installPluginLoadsItImmediately();
+    void installRejectsNonPlugins();
 
 private:
     QAction* pluginAction(const QString& text) const;
@@ -52,6 +56,9 @@ void NppPluginHostTest::initTestCase()
     QCoreApplication::setApplicationName("Notepadqq-tests");
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_settingsDirectory.path());
+
+    // Leftovers of a previous run of installPluginLoadsItImmediately().
+    QDir(NppPluginManager::pluginsHomePath() + "/NqqInstalledPlugin").removeRecursively();
 
     m_window = new MainWindow(QStringList());
     m_window->setAttribute(Qt::WA_DeleteOnClose, false);
@@ -230,6 +237,63 @@ void NppPluginHostTest::dockingPanelIsHosted()
     EditorNS::Editor* editor = m_window->currentEditor();
     HWND mainSci = NppPluginManager::instance()->scintillaHandle(0);
     QCOMPARE(static_cast<sptr_t>(SendMessageW(mainSci, SCI_GETLENGTH, 0, 0)), editor->sci(SCI_GETLENGTH));
+}
+
+void NppPluginHostTest::peInspectionRecognisesPlugins()
+{
+    const QString dll = NppPluginManager::pluginsHomePath() + "/NqqTestPlugin/NqqTestPlugin.dll";
+    const PeFileInfo plugin = PeFileInfo::inspect(dll);
+    QVERIFY2(plugin.valid, qPrintable(plugin.error));
+    QVERIFY(plugin.isNppPlugin());
+    QVERIFY(plugin.matchesCurrentProcess());
+    QCOMPARE(plugin.machineName(), QString("64-bit (x64)"));
+
+    const PeFileInfo exe = PeFileInfo::inspect(QCoreApplication::applicationFilePath());
+    QVERIFY(exe.valid);
+    QVERIFY(!exe.isNppPlugin());
+
+    const PeFileInfo text = PeFileInfo::inspect(NppPluginManager::pluginsHomePath() + "/../CMakeCache.txt");
+    QVERIFY(!text.valid);
+}
+
+void NppPluginHostTest::installPluginLoadsItImmediately()
+{
+    // A plugin DLL downloaded somewhere, with a name that does not follow the folder layout.
+    QTemporaryDir downloads;
+    QVERIFY(downloads.isValid());
+    const QString downloaded = downloads.filePath("NqqInstalledPlugin.dll");
+    QVERIFY(QFile::copy(NppPluginManager::pluginsHomePath() + "/NqqTestPlugin/NqqTestPlugin.dll", downloaded));
+
+    const int before = NppPluginManager::instance()->loadedPluginPaths().size();
+    QString name;
+    const QString error = NppPluginManager::instance()->installPlugin(downloaded, &name);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QCOMPARE(name, QString("Nqq Test Plugin"));
+    QCOMPARE(NppPluginManager::instance()->loadedPluginPaths().size(), before + 1);
+    QVERIFY(QFileInfo::exists(NppPluginManager::pluginsHomePath() + "/NqqInstalledPlugin/NqqInstalledPlugin.dll"));
+
+    // The new plugin got its own sub-menu and received NPPN_READY.
+    auto* pluginsMenu = m_window->findChild<QMenu*>("menuNppPlugins");
+    int testMenus = 0;
+    for (QAction* entry : pluginsMenu->actions()) {
+        if (entry->menu() && entry->menu()->title() == QLatin1String("Nqq Test Plugin"))
+            ++testMenus;
+    }
+    QCOMPARE(testMenus, 2);
+    HMODULE module = GetModuleHandleW(L"NqqInstalledPlugin.dll");
+    QVERIFY(module);
+    auto flags = reinterpret_cast<int (*)()>(GetProcAddress(module, "nqqTestFlags"));
+    QVERIFY(flags && (flags() & 2));
+
+    // Installing it again is refused while it is loaded.
+    QVERIFY(!NppPluginManager::instance()->installPlugin(downloaded).isEmpty());
+}
+
+void NppPluginHostTest::installRejectsNonPlugins()
+{
+    const QString error = NppPluginManager::instance()->installPlugin(QCoreApplication::applicationFilePath());
+    QVERIFY(error.contains("not a Notepad++ plugin"));
+    QVERIFY(!NppPluginManager::instance()->installPlugin("C:/does/not/exist.dll").isEmpty());
 }
 
 QTEST_MAIN(NppPluginHostTest)

@@ -256,7 +256,7 @@ void EditorTest::cleanStateFollowsSavePointAndUndo()
     const int generation = await(editor.getHistoryGeneration());
     editor.dispatch("C_CMD_UNDO", 0);
     QVERIFY(editor.isClean());
-    QVERIFY(await(editor.getHistoryGeneration()) < generation);
+    QVERIFY(await(editor.getHistoryGeneration()) != generation);
 
     editor.markDirty();
     QVERIFY(!editor.isClean());

@@ -483,8 +483,12 @@ void Editor::handleNotification(SCNotification* scn, bool fromView)
 {
     switch (scn->nmhdr.code) {
     case SCN_MODIFIED:
-        if (scn->modificationType & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT))
+        if (scn->modificationType & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT)) {
+            // Every change (including undo/redo) gets a new generation, so that the backup
+            // service never mistakes modified contents for already saved ones.
+            ++m_changeCounter;
             scheduleContentChanged();
+        }
         break;
     case SCN_SAVEPOINTREACHED:
     case SCN_SAVEPOINTLEFT: {
@@ -875,7 +879,7 @@ QtPromise::QPromise<void> Editor::markDirty()
 }
 
 QtPromise::QPromise<int> Editor::getHistoryGeneration()
-{ return QtPromise::QPromise<int>::resolve(static_cast<int>(sci(SCI_GETUNDOCURRENT))); }
+{ return QtPromise::QPromise<int>::resolve(m_changeCounter); }
 
 void Editor::setLanguage(const Language* lang)
 {
@@ -1508,7 +1512,7 @@ QVariant Editor::dispatch(const QString& msg, const QVariant& data)
     } else if (msg == "C_FUN_IS_CLEAN") {
         return isClean();
     } else if (msg == "C_FUN_GET_HISTORY_GENERATION") {
-        return static_cast<int>(s.send(SCI_GETUNDOCURRENT));
+        return m_changeCounter;
     } else if (msg == "C_CMD_SET_LANGUAGE") {
         const QString key = data.toString();
         for (const Language& l : LanguageService::getInstance().languages()) {

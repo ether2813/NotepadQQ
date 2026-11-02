@@ -143,8 +143,8 @@ public:
     Q_INVOKABLE QtPromise::QPromise<void> markDirty();
 
     /**
-     * @brief Returns an integer that denotes the editor's history state. Making changes to
-     *        the contents increments the integer while reverting changes decrements it again.
+     * @brief Returns an integer that changes every time the contents change (edits, undo and
+     *        redo). Used by the backup service to detect documents that need a new snapshot.
      */
     Q_INVOKABLE QtPromise::QPromise<int> getHistoryGeneration();
 
@@ -389,6 +389,7 @@ private:
     QString m_tabName;
     bool m_fileOnDiskChanged = false;
     bool m_forceDirty = false;
+    int m_changeCounter = 0;
     bool m_lastReportedClean = true;
     QString m_endOfLineSequence = "\n";
     QTextCodec* m_codec = QTextCodec::codecForName("UTF-8");
