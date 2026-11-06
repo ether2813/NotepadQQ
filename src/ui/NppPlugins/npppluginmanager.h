@@ -61,6 +61,18 @@ public:
     void notifyPlugins(UINT code, quintptr idFrom = 0);
 
     /** Directory containing the bundled plugins (<exe dir>\plugins). */
+    /**
+     * @brief Installs a plugin from a DLL or a zip package: copies it into
+     *        plugins\<Name>\<Name>.dll (or the per-user plugins folder when the application
+     *        folder is not writable) and loads it immediately.
+     * @return an empty string on success, otherwise a message explaining the problem.
+     */
+    QString installPlugin(const QString& source, QString* installedName = nullptr);
+
+    /** Paths of the loaded plugin DLLs and the problems found while loading plugins. */
+    QStringList loadedPluginPaths() const;
+    const QStringList& loadProblems() const { return m_loadErrors; }
+
     static QString pluginsHomePath();
     static QString userPluginsPath();
     static QString pluginsConfigPath();
@@ -100,8 +112,11 @@ private:
     bool handleMenuCommand(int id);
 
     void loadPlugins();
+    QStringList discoverPlugins(const QString& root, QStringList* problems);
     bool loadPlugin(const QString& path, QString* error);
     void buildMenus();
+    void addPluginMenu(Plugin* plugin);
+    void installPluginInteractive();
     void connectApplicationSignals();
     void connectView(EditorNS::ScintillaView* view);
     void runCommand(int cmdId);
@@ -135,6 +150,7 @@ private:
     QHash<int, Command> m_commands;
     QStringList m_loadErrors;
     QPointer<QMenu> m_pluginsMenu;
+    QAction* m_pluginsSeparator = nullptr;
     HMENU m_shadowPluginMenu = nullptr;
     HMENU m_shadowMainMenu = nullptr;
     NppDockManager* m_dock = nullptr;

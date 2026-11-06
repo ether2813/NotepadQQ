@@ -8,10 +8,48 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QSettings>
+#include <QStandardPaths>
 
 const QString Notepadqq::version = POINTVERSION;
 const QString Notepadqq::contributorsUrl = "https://github.com/notepadqq/notepadqq/graphs/contributors";
 const QString Notepadqq::website = "https://notepadqq.com";
+
+namespace {
+bool g_portable = false;
+}
+
+void Notepadqq::initPortableMode()
+{
+    // Like Notepad++'s doLocalConf.xml: the portable zip ships this file next to the executable,
+    // and all settings, sessions and snapshots then live in the application folder instead of
+    // the user profile (where they would be shared with any other copy of Notepadqq).
+    const QDir appDir(QCoreApplication::applicationDirPath());
+    if (!QFileInfo::exists(appDir.filePath(QStringLiteral("portable.txt"))))
+        return;
+
+    const QString settingsDir = appDir.filePath(QStringLiteral("settings"));
+    if (!QDir().mkpath(settingsDir))
+        return;
+    QFile probe(QDir(settingsDir).filePath(QStringLiteral(".write-test")));
+    if (!probe.open(QIODevice::WriteOnly))
+        return; // Read-only location: fall back to the user profile.
+    probe.close();
+    probe.remove();
+
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDir);
+    g_portable = true;
+}
+
+bool Notepadqq::isPortable()
+{ return g_portable; }
+
+QString Notepadqq::userConfigPath()
+{
+    if (g_portable)
+        return QFileInfo(QSettings().fileName()).absolutePath();
+    return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+}
 
 QString Notepadqq::copyright()
 { return QString("Copyright © 2010-%1, Daniele Di Sarli").arg(COPYRIGHT_YEAR); }
@@ -150,4 +188,6 @@ void Notepadqq::printEnvironmentInfo()
                     .c_str();
     qDebug() << QString("CPU: %1").arg(QSysInfo::currentCpuArchitecture()).toStdString().c_str();
     qDebug() << QString("Kernel: %1 - %2").arg(QSysInfo::kernelType(), QSysInfo::kernelVersion()).toStdString().c_str();
+    qDebug() << QString("Portable: %1").arg(g_portable ? "yes" : "no").toStdString().c_str();
+    qDebug() << QString("Settings: %1").arg(QSettings().fileName()).toStdString().c_str();
 }

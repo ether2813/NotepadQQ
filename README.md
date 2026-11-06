@@ -32,10 +32,14 @@ component used by Notepad++. The Notepadqq user interface is unchanged.
 * **Windows-native performance**: no embedded Chromium process. Every editor view is a real
   Win32 Scintilla window and documents are switched in place like in Notepad++, so opening a
   tab no longer starts a web page and large files use Scintilla's native text buffer.
-* **Notepad++ plugins**: x64 Notepad++ plugins can be dropped into `plugins\<Name>\<Name>.dll`
-  next to `notepadqq.exe` and are loaded at startup, with their menus, toolbar icons, docking
-  panels and notifications. See [doc/notepad++-plugins.md](doc/notepad++-plugins.md) for what is
-  supported and the known limitations.
+* **Notepad++ plugins**: install x64 Notepad++ plugins with *Plugins → Install a Plugin…* (DLL or
+  zip) or drop them into the `plugins` folder next to `notepadqq.exe`. They are loaded with their
+  menus, toolbar icons, docking panels and notifications. See
+  [doc/notepad++-plugins.md](doc/notepad++-plugins.md) for what is supported and the known
+  limitations.
+* **Sessions like Notepad++**: closing Notepadqq never asks to save; at the next start every tab
+  is back, including unsaved new documents. A snapshot is taken every 7 seconds, when Notepadqq
+  loses focus and when Windows shuts down or restarts, so nothing is lost after a reboot.
 * **Notepad++ languages and themes**: syntax highlighting uses Notepad++'s `langs.xml` and the
   bundled Notepad++ themes (Monokai, Obsidian, Solarized, Zenburn, Dark Mode Default, ...).
   Extra Notepad++ themes can be copied to `%APPDATA%\Notepadqq\themes`.
@@ -45,9 +49,16 @@ On Linux and macOS the same editor code runs on the official Qt port of Scintill
 ### Windows build (GitHub Actions)
 
 The [Windows Build workflow](.github/workflows/windows.yml) compiles Notepadqq with MSVC and
-Qt 6.8 on every push, runs the tests, and uploads a portable `notepadqq-windows-x64` artifact
-(`notepadqq.exe` + Qt runtime + `appdata\` + `plugins\`). Pushing a `v*` tag or creating a
-GitHub release also attaches the zip to the release.
+Qt 6.8 on every push, runs the tests, and produces two downloads:
+
+* `notepadqq-windows-x64-installer`: `Notepadqq-<version>-x64-setup.exe`, a normal Windows
+  installer (Program Files, Start menu and desktop shortcuts, optional "Edit with Notepadqq"
+  context menu, uninstaller in *Apps & features*);
+* `notepadqq-windows-x64-portable`: the application folder; unzip it anywhere and run
+  `notepadqq.exe`.
+
+The installer is installed, started and uninstalled on the CI runner to verify it. Pushing a
+`v*` tag or creating a GitHub release attaches both zip files to the release.
 
 ### Building on Windows locally
 

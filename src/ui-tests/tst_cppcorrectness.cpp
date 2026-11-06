@@ -10,16 +10,12 @@
 #include "include/encodingdetector.h"
 #include "include/localsockethelpers.h"
 #include "include/notepadqq.h"
-#include "include/statsruntime.h"
 
 #include <QElapsedTimer>
 #include <QFile>
 #include <QIODevice>
 #include <QLocalServer>
 #include <QLocalSocket>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QNetworkRequest>
 #include <QPointer>
 #include <QProcess>
 #include <QTemporaryDir>
@@ -41,59 +37,7 @@ using namespace std::chrono_literals;
 QString Notepadqq::nodejsPath()
 { return QStringLiteral("/definitely-not-a-node-runtime"); }
 
-// In-process reply used to deterministically exercise the telemetry cleanup helper.
-class FakeReply : public QNetworkReply {
-    Q_OBJECT
-public:
-    explicit FakeReply(QObject* parent, bool finishImmediately)
-        : QNetworkReply(parent)
-        , m_finishImmediately(finishImmediately)
-    {
-        open(ReadOnly | Unbuffered);
-        setUrl(QUrl(QStringLiteral("http://127.0.0.1/fake")));
-        if (m_finishImmediately) {
-            QTimer::singleShot(0, this, [this] {
-                setFinished(true);
-                emit finished();
-            });
-        }
-    }
-
-    void abort() override
-    {
-        if (isFinished()) {
-            return;
-        }
-        setError(OperationCanceledError, QStringLiteral("aborted"));
-        setFinished(true);
-        emit finished();
-    }
-
-protected:
-    qint64 readData(char*, qint64) override { return -1; }
-
-private:
-    bool m_finishImmediately = false;
-};
-
-// In-process manager that returns either a stalled or an immediately finishing reply.
-class FakeManager : public QNetworkAccessManager {
-    Q_OBJECT
-public:
-    explicit FakeManager(bool finishImmediately, QObject* parent = nullptr)
-        : QNetworkAccessManager(parent)
-        , m_finishImmediately(finishImmediately)
-    {
-    }
-
-protected:
-    QNetworkReply* createRequest(Operation, const QNetworkRequest&, QIODevice*) override
-    { return new FakeReply(this, m_finishImmediately); }
-
-private:
-    bool m_finishImmediately = false;
-};
-
+// Minimal file reader used by FileSearcher (DocEngine itself is not linked into this test).
 DocEngine::DecodedText DocEngine::readToString(QFile* file)
 {
     DecodedText decoded;
@@ -101,7 +45,6 @@ DocEngine::DecodedText DocEngine::readToString(QFile* file)
         decoded.error = true;
         return decoded;
     }
-
     decoded.text = QString::fromUtf8(file->readAll());
     return decoded;
 }
@@ -118,9 +61,6 @@ private Q_SLOTS:
     void deferredCallbackIsDiscardedWhenContextIsDestroyed();
     void cancellationRequestsInterruptionAndStopsFilesystemSearch();
     void searchPlainText_handlesContentEndingInLf();
-    void statsTransmissionDueUsesSeconds();
-    void statsPostDeletesFinishedReplies();
-    void statsPostAbortsStalledReplies();
     void localSocketProbeDoesNotLeakFailedConnection();
     void localSocketDeletesAcceptedPeerAfterDisconnect();
     void extensionOwnsRuntimeProcessForImmediateDestruction();
@@ -380,33 +320,6 @@ void CppCorrectnessTest::searchPlainText_handlesContentEndingInLf()
 
     QCOMPARE(result.results.size(), 1);
     QCOMPARE(result.results.constFirst().lineNumber, 1);
-}
-
-// Guards the weekly statistics interval against the old milliseconds-vs-seconds mismatch.
-void CppCorrectnessTest::statsTransmissionDueUsesSeconds()
-{
-    QVERIFY(!StatsRuntime::isTransmissionDue(100, 100 + (7 * 24 * 60 * 60) - 1));
-    QVERIFY(StatsRuntime::isTransmissionDue(100, 100 + (7 * 24 * 60 * 60)));
-}
-
-// Guards the telemetry helper against leaking a normal reply after completion.
-void CppCorrectnessTest::statsPostDeletesFinishedReplies()
-{
-    FakeManager manager(true);
-    QNetworkRequest request(QUrl(QStringLiteral("http://127.0.0.1/fake")));
-    QPointer<QNetworkReply> reply = StatsRuntime::post(&manager, request, QByteArrayLiteral("{}"), 200ms);
-    QVERIFY(reply);
-    QTRY_VERIFY_WITH_TIMEOUT(reply.isNull(), 2000);
-}
-
-// Guards the telemetry helper against leaving a stalled reply alive indefinitely.
-void CppCorrectnessTest::statsPostAbortsStalledReplies()
-{
-    FakeManager manager(false);
-    QNetworkRequest request(QUrl(QStringLiteral("http://127.0.0.1/fake")));
-    QPointer<QNetworkReply> reply = StatsRuntime::post(&manager, request, QByteArrayLiteral("{}"), 20ms);
-    QVERIFY(reply);
-    QTRY_VERIFY_WITH_TIMEOUT(reply.isNull(), 2000);
 }
 
 // Guards the BOM-less charset detection used when opening files.

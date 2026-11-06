@@ -8,7 +8,6 @@
 #include "include/notepadqq.h"
 #include "include/nqqsettings.h"
 #include "include/singleapplication.h"
-#include "include/stats.h"
 #ifdef Q_OS_WIN
 #include "include/EditorNS/nativekeyrouter.h"
 #endif
@@ -18,6 +17,7 @@
 #include <QLocale>
 #include <QObject>
 #include <QRandomGenerator>
+#include <QSessionManager>
 #include <QTranslator>
 #include <QtGlobal>
 
@@ -74,6 +74,7 @@ int main(int argc, char* argv[])
 #endif
 
     QSettings::setDefaultFormat(QSettings::IniFormat);
+    Notepadqq::initPortableMode();
 
     NqqSettings::ensureBackwardsCompatibility();
     NqqSettings& settings = NqqSettings::getInstance();
@@ -192,14 +193,31 @@ int main(int argc, char* argv[])
     if (settings.General.getAutosaveInterval() > 0)
         BackupService::enableAutosave(settings.General.getAutosaveInterval());
 
+    // Windows shutdown, restart or log off terminates the process without closing the windows
+    // normally. Save everything right now, like Notepad++, so that all tabs (including unsaved
+    // ones) come back at the next start.
+    QObject::connect(
+        &a,
+        &QGuiApplication::commitDataRequest,
+        &a,
+        [](QSessionManager&) {
+            BackupService::executeBackup();
+            if (NqqSettings::getInstance().General.getRememberTabsOnExit() && !MainWindow::instances().isEmpty()) {
+                MainWindow* wnd = MainWindow::lastActiveInstance();
+                if (!wnd)
+                    wnd = MainWindow::instances().back();
+                Sessions::saveSession(wnd->getDocEngine(),
+                    wnd->topEditorContainer(),
+                    PersistentCache::cacheSessionPath(),
+                    PersistentCache::cacheDirPath());
+            }
+        },
+        Qt::DirectConnection);
+
 #ifdef QT_DEBUG
     qint64 __aet_elapsed = __aet_timer.nsecsElapsed();
     qDebug() << QString("Started in " + QString::number(__aet_elapsed / 1000 / 1000) + "msec").toStdString().c_str();
 #endif
-
-    // Initialize stats, but delay so that we are sure that
-    // any dialog will open on top of MainWindow without blocking it.
-    QTimer::singleShot(0, []() { Stats::init(); });
 
     auto retVal = a.exec();
 

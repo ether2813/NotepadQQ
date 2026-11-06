@@ -29,6 +29,12 @@ bool saveSession(
  */
 void loadSession(DocEngine* docEngine, TopEditorContainer* editorContainer, QString sessionPath);
 
+/**
+ * @brief Whether the session file contains at least one tab that loadSession() would restore
+ *        (a file that still exists or a cached copy of unsaved contents).
+ */
+bool hasRestorableTabs(const QString& sessionPath);
+
 } // namespace Sessions
 
 #endif // SESSIONS_H

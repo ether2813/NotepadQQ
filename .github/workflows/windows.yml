@@ -1,7 +1,10 @@
 name: Windows Build
 
 # Native Windows (x64, MSVC) build of Notepadqq with the Win32 Scintilla editor and the
-# Notepad++ plugin host. Produces a portable zip:
+# Notepad++ plugin host. Produces two downloads:
+#
+#   notepadqq-windows-x64-installer  <- Notepadqq-<version>-x64-setup.exe (Start menu, uninstaller, ...)
+#   notepadqq-windows-x64-portable   <- the folder below, unzip anywhere and run notepadqq.exe
 #
 #   Notepadqq/
 #     notepadqq.exe        <- the application
@@ -103,23 +106,105 @@ jobs:
           if (-not (Test-Path "dist/Notepadqq/appdata/npp/langs.xml")) { throw "appdata is missing" }
           if (-not (Test-Path "dist/Notepadqq/plugins/README.txt")) { throw "plugins folder is missing" }
 
+      # Start the packaged application for real (first start, restart after being killed,
+      # second instance, clean exit) and check it shows exactly one responsive window.
+      - name: GUI smoke test
+        shell: pwsh
+        run: ./.github/ci/windows-gui-smoke.ps1 -Exe dist/Notepadqq/notepadqq.exe -SymbolPath "${{ github.workspace }}\build" -OutDir gui-smoke
+
+      - name: Upload GUI smoke test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-smoke-${{ matrix.config }}
+          path: gui-smoke
+          if-no-files-found: ignore
+
+      - name: Version
+        shell: pwsh
+        run: |
+          $base = (Select-String -Path CMakeLists.txt -Pattern 'project\(notepadqq VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $version = "${{ github.ref_name }}".TrimStart('v')
+          } else {
+            $version = "$base-dev.${{ github.run_number }}"
+          }
+          $numeric = "$base.${{ github.run_number }}"
+          echo "NQQ_VERSION=$version" >> $env:GITHUB_ENV
+          echo "NQQ_VERSION_NUMERIC=$numeric" >> $env:GITHUB_ENV
+          echo "Version: $version ($numeric)"
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $dist = (Resolve-Path dist/Notepadqq).Path
+          $out = Join-Path (Resolve-Path dist).Path "Notepadqq-$env:NQQ_VERSION-x64-setup.exe"
+          makensis /V3 "/DVERSION=$env:NQQ_VERSION" "/DVERSION_NUMERIC=$env:NQQ_VERSION_NUMERIC" "/DDISTDIR=$dist" "/DOUTFILE=$out" support_files/windows/installer.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
+          echo "NQQ_SETUP=$out" >> $env:GITHUB_ENV
+
+      - name: Test installer (silent install, run, uninstall)
+        shell: pwsh
+        run: |
+          $target = "C:\NotepadqqInstallTest"
+          $p = Start-Process -FilePath $env:NQQ_SETUP -ArgumentList "/S", "/D=$target" -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "installer failed with exit code $($p.ExitCode)" }
+          foreach ($f in @("notepadqq.exe", "uninstall.exe", "appdata\npp\langs.xml", "plugins\README.txt", "Qt6Core.dll")) {
+            if (-not (Test-Path (Join-Path $target $f))) { throw "missing after install: $f" }
+          }
+          $key = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Notepadqq"
+          if (-not (Test-Path $key)) { throw "uninstall registry entry missing" }
+          $r = Start-Process -FilePath "$target\notepadqq.exe" -ArgumentList "--print-debug-info" -PassThru -Wait
+          if ($r.ExitCode -ne 0) { throw "installed notepadqq.exe failed with exit code $($r.ExitCode)" }
+          $u = Start-Process -FilePath "$target\uninstall.exe" -ArgumentList "/S", "_?=$target" -PassThru -Wait
+          if ($u.ExitCode -ne 0) { throw "uninstaller failed with exit code $($u.ExitCode)" }
+          if (Test-Path "$target\notepadqq.exe") { throw "notepadqq.exe still present after uninstall" }
+          if (Test-Path $key) { throw "uninstall registry entry still present" }
+
+      # Only the portable download keeps its settings next to notepadqq.exe (the installer was
+      # built above, without this file).
+      - name: Enable portable mode
+        shell: pwsh
+        run: |
+          Copy-Item support_files/windows/portable.txt dist/Notepadqq/portable.txt
+          $env:QT_FORCE_STDERR_LOGGING = "1"
+          $p = Start-Process -FilePath dist/Notepadqq/notepadqq.exe -ArgumentList "--print-debug-info" -PassThru -Wait -RedirectStandardError portable-info.txt
+          Get-Content portable-info.txt
+          if (-not (Select-String -Path portable-info.txt -Pattern "Portable: yes" -Quiet)) { throw "portable mode is not active" }
+          if (-not (Test-Path dist/Notepadqq/settings)) { throw "portable settings folder was not created" }
+          Remove-Item -Recurse -Force dist/Notepadqq/settings
+
       - name: Package
         shell: pwsh
         run: |
-          $name = "notepadqq-windows-x64"
-          if ("${{ github.ref_type }}" -eq "tag") { $name = "notepadqq-${{ github.ref_name }}-windows-x64" }
-          Compress-Archive -Path dist/Notepadqq -DestinationPath "dist/$name.zip"
-          echo "PACKAGE_NAME=$name" >> $env:GITHUB_ENV
+          $suffix = "windows-x64"
+          if ("${{ github.ref_type }}" -eq "tag") { $suffix = "${{ github.ref_name }}-windows-x64" }
+          $portable = "notepadqq-$suffix-portable"
+          $installer = "notepadqq-$suffix-installer"
+          Compress-Archive -Path dist/Notepadqq -DestinationPath "dist/$portable.zip"
+          Compress-Archive -Path $env:NQQ_SETUP -DestinationPath "dist/$installer.zip"
+          echo "PORTABLE_NAME=$portable" >> $env:GITHUB_ENV
+          echo "INSTALLER_NAME=$installer" >> $env:GITHUB_ENV
 
-      - name: Upload artifact
+      # Two downloads: the portable folder (unzip and run) and the installer.
+      - name: Upload portable build
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.PACKAGE_NAME }}
+          name: ${{ env.PORTABLE_NAME }}
           path: dist/Notepadqq
+          if-no-files-found: error
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.INSTALLER_NAME }}
+          path: ${{ env.NQQ_SETUP }}
           if-no-files-found: error
 
       - name: Publish release asset
         if: github.event_name == 'release' || github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/${{ env.PACKAGE_NAME }}.zip
+          files: |
+            dist/${{ env.PORTABLE_NAME }}.zip
+            dist/${{ env.INSTALLER_NAME }}.zip

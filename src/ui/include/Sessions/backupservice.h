@@ -3,6 +3,7 @@
 
 #include <QSharedPointer>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 
 #include <set>
@@ -57,6 +58,19 @@ public:
      */
     static void resume();
 
+    /**
+     * @brief Writes a snapshot of every window whose documents changed since the last one.
+     *        Called periodically, when the application loses focus and when Windows ends the
+     *        user session (shutdown, restart, log off).
+     */
+    static void executeBackup();
+
+    /**
+     * @brief Whether this process owns the snapshot folder (only one running instance does).
+     *        Only the owner restores snapshots at start-up.
+     */
+    static bool ownsBackupData();
+
 private:
     static QTimer s_autosaveTimer;
     static bool s_autosaveEnabled;
@@ -84,10 +98,10 @@ private:
     static std::set<WindowData> s_backupWindowData;
 
     /**
-     * @brief executeAutosave Updates the data inside s_autosaveData and executes saveSession
-     *        for every open MainWindow that needs it.
+     * @brief Snapshot folders restored at start-up. They are deleted once the restored windows
+     *        have snapshots of their own.
      */
-    static void executeBackup();
+    static QStringList s_restoredDirs;
 
     /**
      * @brief writeBackup Writes a backup of the given MainWindow into a unique location inside the backupCache

@@ -297,8 +297,9 @@ bool saveSession(DocEngine* docEngine, TopEditorContainer* editorContainer, QStr
 
         for (int j = 0; j < tabCount; j++) {
             auto editor = tabWidget->editor(j);
-            bool isClean = true;
-            editor->isCleanP().wait().tap([&](bool _isClean) { isClean = _isClean; });
+            // Read synchronously: a continuation attached with tap() after wait() would only run
+            // later from the event loop, and every tab would look clean (unsaved tabs were lost).
+            const bool isClean = editor->isClean();
             bool isOrphan = editor->filePath().isEmpty();
             IndentationMode indentInfo = editor->indentationMode();
 
@@ -368,6 +369,28 @@ bool saveSession(DocEngine* docEngine, TopEditorContainer* editorContainer, QStr
         sessionWriter.addViewData(view);
 
     return true;
+}
+
+bool hasRestorableTabs(const QString& sessionPath)
+{
+    QFile file(sessionPath);
+    if (!file.open(QIODevice::ReadOnly))
+        return false;
+
+    SessionReader reader(file);
+    bool success = false;
+    const auto views = reader.readData(&success);
+    if (!success)
+        return false;
+
+    for (const auto& view : views) {
+        for (const TabData& tab : view.tabs) {
+            if ((!tab.filePath.isEmpty() && QFileInfo::exists(tab.filePath)) ||
+                (!tab.cacheFilePath.isEmpty() && QFileInfo::exists(tab.cacheFilePath)))
+                return true;
+        }
+    }
+    return false;
 }
 
 void loadSession(DocEngine* docEngine, TopEditorContainer* editorContainer, QString sessionPath)

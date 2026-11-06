@@ -7,16 +7,25 @@ Scintilla control that Notepad++ uses (Scintilla 5.6.6 / Lexilla 5.5.3, from the
 
 ## Installing a plugin
 
-1. Download the **x64** build of the plugin (for example from the list used by the
-   Notepad++ *Plugins Admin*).
-2. Extract it into `plugins\<PluginName>\` next to `notepadqq.exe`, so that the DLL is
-   `plugins\<PluginName>\<PluginName>.dll`. This is the same layout as Notepad++ 7.6+.
-   Per-user plugins can also go in `%LOCALAPPDATA%\Notepadqq\plugins\<PluginName>\`.
-3. Restart Notepadqq. The plugin's commands appear in the **Plugins** menu, its toolbar
-   icons in the main toolbar, and its panels as dockable windows.
+**From the menu:** *Plugins → Install a Plugin…*, then select the plugin's `.dll` or the `.zip`
+package downloaded for Notepad++ (x64). Notepadqq checks that it is a 64-bit Notepad++ plugin,
+copies it into `plugins\<Name>\<Name>.dll` (or into `%LOCALAPPDATA%\Notepadqq\plugins` when
+Notepadqq is installed in *Program Files*) and loads it immediately.
+
+**By hand:** copy the plugin next to `notepadqq.exe` in any of these layouts and restart:
+
+* `plugins\<Name>\<Name>.dll` (Notepad++ 7.6+ layout)
+* `plugins\<AnyFolder>\<Name>.dll`
+* `plugins\<Name>.dll`
+
+The same layouts work in `%LOCALAPPDATA%\Notepadqq\plugins\`. DLLs are inspected without being
+loaded, so dependency DLLs shipped with a plugin are not mistaken for plugins, and a 32-bit
+plugin is reported with a clear message instead of being silently skipped. The commands of the
+plugins appear in the **Plugins** menu, their toolbar icons in the main toolbar and their panels
+as dockable windows.
 
 *Plugins → Open Plugins Folder…* opens the folder, and
-*Plugins → About Notepad++ Plugin Support…* lists the loaded plugins.
+*Plugins → About Notepad++ Plugin Support…* lists the loaded plugins and the problems found.
 
 Plugin settings are stored in `%APPDATA%\Notepadqq\plugins\Config\`
 (`NPPM_GETPLUGINSCONFIGDIR`).

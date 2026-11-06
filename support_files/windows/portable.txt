@@ -1,0 +1,7 @@
+Notepadqq portable mode
+
+Because this file is here, Notepadqq keeps its settings, remembered tabs and
+crash-recovery snapshots in the "settings" folder next to notepadqq.exe, and
+does not read or write anything in your user profile (%APPDATA%\Notepadqq).
+
+Delete this file to use the settings stored in your user profile instead.

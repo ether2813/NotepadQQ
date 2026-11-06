@@ -1,7 +1,11 @@
 #include "include/EditorNS/editor.h"
+#include "include/Sessions/backupservice.h"
+#include "include/Sessions/persistentcache.h"
+#include "include/Sessions/sessions.h"
 #include "include/editoruicontroller.h"
 #include "include/mainwindow.h"
 #include "include/notepadqq.h"
+#include "include/topeditorcontainer.h"
 
 #include <QCloseEvent>
 #include <QPointer>
@@ -22,6 +26,9 @@ private Q_SLOTS:
     void languagesPathIsJson();
     void acceptedCloseDisconnectsEditorUiController();
     void directWindowDeletionDestroysEditorUiControllerFirst();
+    void closingWindowRestoresAllTabsAtNextStart();
+    void snapshotRestoresTabsAfterShutdown();
+    void killedRunsDoNotMultiplyWindows();
 
 private:
     QTemporaryDir m_settingsDirectory;
@@ -107,6 +114,180 @@ void NotepadqqTest::directWindowDeletionDestroysEditorUiControllerFirst()
     delete window;
 
     QCOMPARE(destructionOrder, QStringList({"controller", "window"}));
+}
+
+// Notepad++ behaviour: closing the application and starting it again brings back every tab,
+// including unsaved new documents and unsaved changes to files, without asking anything.
+void NotepadqqTest::closingWindowRestoresAllTabsAtNextStart()
+{
+    QTemporaryDir files;
+    QVERIFY(files.isValid());
+    const QString savedPath = files.filePath("saved.txt");
+    const QString modifiedPath = files.filePath("modified.txt");
+    for (const QString& path : {savedPath, modifiedPath}) {
+        QFile f(path);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("on disk\n");
+    }
+
+    auto* window = new MainWindow(QStringList());
+    window->setAttribute(Qt::WA_DeleteOnClose, false);
+    EditorTabWidget* tabs = window->topEditorContainer()->currentTabWidget();
+
+    // 16 unsaved notes, like a typical Notepad++ scratch session.
+    tabs->currentEditor()->setValue("note 0");
+    for (int i = 1; i < 16; i++) {
+        const int idx = tabs->addEditorTab(true, QString("new %1").arg(i + 1));
+        tabs->editor(idx)->setValue(QString("note %1").arg(i));
+    }
+    window->getDocEngine()
+        ->getDocumentLoader()
+        .setUrls({QUrl::fromLocalFile(savedPath), QUrl::fromLocalFile(modifiedPath)})
+        .setTabWidget(tabs)
+        .execute()
+        .wait();
+    QTRY_COMPARE(tabs->count(), 18);
+    EditorNS::Editor* modified = tabs->editor(tabs->findOpenEditorByUrl(QUrl::fromLocalFile(modifiedPath)));
+    QVERIFY(modified);
+    modified->setValue("changed but not saved");
+
+    // Close through the real close path (no "save changes?" question when tabs are remembered).
+    QCloseEvent closeEvent;
+    QCoreApplication::sendEvent(window, &closeEvent);
+    QVERIFY(closeEvent.isAccepted());
+    delete window;
+    QVERIFY(QFileInfo::exists(PersistentCache::cacheSessionPath()));
+
+    // "Next start".
+    auto* restored = new MainWindow(QStringList());
+    restored->setAttribute(Qt::WA_DeleteOnClose, false);
+    Sessions::loadSession(
+        restored->getDocEngine(), restored->topEditorContainer(), PersistentCache::cacheSessionPath());
+    EditorTabWidget* restoredTabs = restored->topEditorContainer()->tabWidget(0);
+    QTRY_COMPARE_WITH_TIMEOUT(restoredTabs->count(), 18, 10000);
+
+    QStringList contents;
+    for (int i = 0; i < restoredTabs->count(); i++) {
+        EditorNS::Editor* editor = restoredTabs->editor(i);
+        QTRY_VERIFY(!editor->isLoading);
+        contents << editor->value();
+    }
+    for (int i = 0; i < 16; i++)
+        QVERIFY2(contents.contains(QString("note %1").arg(i)), qPrintable(contents.join(" | ")));
+    QVERIFY(contents.contains("on disk\n"));
+    QVERIFY(contents.contains("changed but not saved"));
+
+    EditorNS::Editor* restoredModified =
+        restoredTabs->editor(restoredTabs->findOpenEditorByUrl(QUrl::fromLocalFile(modifiedPath)));
+    QVERIFY(restoredModified);
+    QVERIFY(!restoredModified->isClean());
+
+    delete restored;
+}
+
+// Windows shutdown/restart (or a crash) kills the process without a normal close. The periodic
+// snapshot must bring every tab back at the next start.
+void NotepadqqTest::snapshotRestoresTabsAfterShutdown()
+{
+    BackupService::clearBackupData();
+    auto* window = new MainWindow(QStringList());
+    window->setAttribute(Qt::WA_DeleteOnClose, false);
+    EditorTabWidget* tabs = window->topEditorContainer()->currentTabWidget();
+    tabs->currentEditor()->setValue("snapshot 0");
+    for (int i = 1; i < 3; i++)
+        tabs->editor(tabs->addEditorTab(true, QString("new %1").arg(i + 1)))->setValue(QString("snapshot %1").arg(i));
+
+    BackupService::executeBackup();
+    // Typing more after the first snapshot must be captured by the next one.
+    tabs->editor(2)->setCursorPosition(0, 10);
+    tabs->editor(2)->setSelectionsText({" and more"});
+    BackupService::executeBackup();
+
+    // Simulate the process being killed: no close event, no session save.
+    delete window;
+    QVERIFY(BackupService::detectImproperShutdown());
+
+    QVERIFY(BackupService::restoreFromBackup());
+    MainWindow* restored = MainWindow::instances().back();
+    restored->setAttribute(Qt::WA_DeleteOnClose, false);
+    EditorTabWidget* restoredTabs = restored->topEditorContainer()->tabWidget(0);
+    QTRY_COMPARE_WITH_TIMEOUT(restoredTabs->count(), 3, 10000);
+    QStringList contents;
+    for (int i = 0; i < restoredTabs->count(); i++) {
+        QTRY_VERIFY(!restoredTabs->editor(i)->isLoading);
+        contents << restoredTabs->editor(i)->value();
+    }
+    QVERIFY2(contents.contains("snapshot 0"), qPrintable(contents.join(" | ")));
+    QVERIFY(contents.contains("snapshot 1"));
+    QVERIFY(contents.contains("snapshot 2 and more"));
+
+    delete restored;
+    BackupService::clearBackupData();
+}
+
+// Every run that was killed used to leave its snapshot behind, and every snapshot became one more
+// window at the next start (four empty "new" windows after a few hangs). Windows with nothing to
+// restore must not come back, and restored snapshots must be deleted once they are re-saved.
+void NotepadqqTest::killedRunsDoNotMultiplyWindows()
+{
+    BackupService::clearBackupData();
+    QVERIFY(BackupService::ownsBackupData());
+    const QString backupDir = PersistentCache::backupDirPath();
+
+    // Three killed runs that only had an empty tab, one that had an unsaved note.
+    for (int i = 0; i < 3; i++) {
+        const QString dir = backupDir + QString("/window_%1").arg(1000 + i);
+        QVERIFY(QDir().mkpath(dir));
+        QFile f(dir + "/window.xml");
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Notepadqq/>\n");
+    }
+    const QString noteDir = backupDir + "/window_2000";
+    QVERIFY(QDir().mkpath(noteDir));
+    {
+        QFile cache(noteDir + "/new 1.123");
+        QVERIFY(cache.open(QIODevice::WriteOnly));
+        cache.write("unsaved note");
+        QFile f(noteDir + "/window.xml");
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(QString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Notepadqq><View>"
+                        "<Tab filePath=\"\" cacheFilePath=\"%1\" cursorX=\"0\" cursorY=\"0\" scrollX=\"0\" "
+                        "scrollY=\"0\" active=\"1\"/></View></Notepadqq>\n")
+                    .arg((noteDir + "/new 1.123").toHtmlEscaped())
+                    .toUtf8());
+    }
+
+    QVERIFY(BackupService::detectImproperShutdown());
+    const int windowsBefore = MainWindow::instances().size();
+    QVERIFY(BackupService::restoreFromBackup());
+    QCOMPARE(MainWindow::instances().size(), windowsBefore + 1);
+
+    MainWindow* restored = MainWindow::instances().back();
+    restored->setAttribute(Qt::WA_DeleteOnClose, false);
+    EditorTabWidget* tabs = restored->topEditorContainer()->tabWidget(0);
+    QTRY_VERIFY_WITH_TIMEOUT(tabs->count() == 1 && !tabs->editor(0)->isLoading, 10000);
+    QCOMPARE(tabs->editor(0)->value(), QString("unsaved note"));
+
+    // The empty snapshots are gone right away, the restored one after the next snapshot.
+    for (int i = 0; i < 3; i++)
+        QVERIFY(!QFileInfo::exists(backupDir + QString("/window_%1").arg(1000 + i)));
+    BackupService::executeBackup();
+    QVERIFY(!QFileInfo::exists(noteDir));
+    QDir dir(backupDir);
+    QCOMPARE(dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot).size(), 1);
+
+    // "Killed" again: the next start brings back exactly that one window.
+    delete restored;
+    QVERIFY(BackupService::restoreFromBackup());
+    QCOMPARE(MainWindow::instances().size(), windowsBefore + 1);
+    restored = MainWindow::instances().back();
+    restored->setAttribute(Qt::WA_DeleteOnClose, false);
+    tabs = restored->topEditorContainer()->tabWidget(0);
+    QTRY_VERIFY_WITH_TIMEOUT(tabs->count() == 1 && !tabs->editor(0)->isLoading, 10000);
+    QCOMPARE(tabs->editor(0)->value(), QString("unsaved note"));
+
+    delete restored;
+    BackupService::clearBackupData();
 }
 
 QTEST_MAIN(NotepadqqTest)
