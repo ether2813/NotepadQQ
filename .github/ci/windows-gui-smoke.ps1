@@ -136,7 +136,38 @@ $p = Start-Nqq "after-kill-1"
 Stop-Nqq
 $p = Start-Nqq "after-kill-2"
 
-# 3. A second launch while running hands over to the running instance (no new process window).
+# Writes a snapshot like the one a killed run leaves behind (old naming, no process id).
+function New-Snapshot([string]$name, [string]$note) {
+    $dir = Join-Path $settingsDir "backupCache\$name"
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $tabs = ""
+    if ($note) {
+        $cache = Join-Path $dir "new 1.42"
+        Set-Content -NoNewline -Encoding utf8NoBOM -Path $cache -Value $note
+        $esc = [System.Security.SecurityElement]::Escape(($cache -replace '\\', '/'))
+        $tabs = "<View><Tab filePath=`"`" cacheFilePath=`"$esc`" cursorX=`"0`" cursorY=`"0`" scrollX=`"0`" scrollY=`"0`" active=`"1`"/></View>"
+    }
+    Set-Content -Encoding utf8NoBOM -Path (Join-Path $dir "window.xml") -Value "<?xml version=`"1.0`" encoding=`"UTF-8`"?><Notepadqq>$tabs</Notepadqq>"
+}
+
+# 3. Leftovers of four hung-and-killed runs that only had empty tabs: one window, not five.
+Stop-Nqq
+1..4 | ForEach-Object { New-Snapshot "window_$(1000 + $_)" "" }
+$p = Start-Nqq "empty-leftovers"
+
+# 4. Three windows with unsaved notes are all restored and all respond.
+Stop-Nqq
+Remove-Item -Recurse -Force (Join-Path $settingsDir "backupCache") -ErrorAction SilentlyContinue
+1..3 | ForEach-Object { New-Snapshot "window_$(2000 + $_)" "note $_" }
+$p = Start-Nqq "three-windows" 3
+Stop-Nqq
+# ...and once re-saved, the old snapshots are gone: the next start restores the same three.
+$p = Start-Nqq "three-windows-again" 3
+Stop-Nqq
+Remove-Item -Recurse -Force (Join-Path $settingsDir "backupCache") -ErrorAction SilentlyContinue
+$p = Start-Nqq "fresh-again"
+
+# 5. A second launch while running hands over to the running instance (no new process window).
 if ($p -and -not $p.HasExited) {
     $second = Start-Process -FilePath $Exe -PassThru
     if (-not $second.WaitForExit(15000)) {
@@ -150,7 +181,7 @@ if ($p -and -not $p.HasExited) {
     Save-Screenshot "second-instance"
 }
 
-# 4. Normal close must not leave snapshots behind.
+# 6. Normal close must not leave snapshots behind.
 if ($p -and -not $p.HasExited) {
     $p.CloseMainWindow() | Out-Null
     if (-not $p.WaitForExit(15000)) {
