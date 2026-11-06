@@ -86,15 +86,19 @@ QtPromise::QPromise<void> DocEngine::read(QFile* file, Editor* editor, QTextCode
     else if (decoded.text.indexOf("\r") != -1)
         guardedEditor->setEndOfLineSequence("\r");
 
-    return guardedEditor->setValue(decoded.text)
-        .then([guardedEditor]() {
-            return guardedEditor ? guardedEditor->asyncSendMessageWithResultP("C_CMD_CLEAR_HISTORY")
-                                 : QtPromise::QPromise<QVariant>::reject(0);
-        })
-        .then([guardedEditor]() {
-            return guardedEditor ? guardedEditor->markClean() : QtPromise::QPromise<void>::reject(0);
-        })
-        .then([]() {});
+    // The Scintilla editor does all of this synchronously. Do not chain the steps with then():
+    // continuations only run from the event loop, so every caller that waits for the result
+    // would spin a nested event loop. While restoring several windows, those nested loops start
+    // loading the next documents, which wait in turn, and the GUI thread never returns to the
+    // main loop (the windows stay blank and "Not Responding").
+    guardedEditor->setValue(decoded.text);
+    if (!guardedEditor)
+        return QtPromise::QPromise<void>::reject(0);
+    guardedEditor->asyncSendMessageWithResultP("C_CMD_CLEAR_HISTORY");
+    if (!guardedEditor)
+        return QtPromise::QPromise<void>::reject(0);
+    guardedEditor->markClean();
+    return QtPromise::QPromise<void>::resolve();
 }
 
 int showFileSizeDialog(const QString docName, long long fileSize, bool multipleFiles)
