@@ -106,6 +106,20 @@ jobs:
           if (-not (Test-Path "dist/Notepadqq/appdata/npp/langs.xml")) { throw "appdata is missing" }
           if (-not (Test-Path "dist/Notepadqq/plugins/README.txt")) { throw "plugins folder is missing" }
 
+      # Start the packaged application for real (first start, restart after being killed,
+      # second instance, clean exit) and check it shows exactly one responsive window.
+      - name: GUI smoke test
+        shell: pwsh
+        run: ./.github/ci/windows-gui-smoke.ps1 -Exe dist/Notepadqq/notepadqq.exe -SymbolPath "${{ github.workspace }}\build" -OutDir gui-smoke
+
+      - name: Upload GUI smoke test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-smoke-${{ matrix.config }}
+          path: gui-smoke
+          if-no-files-found: ignore
+
       - name: Version
         shell: pwsh
         run: |
