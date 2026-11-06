@@ -28,6 +28,7 @@ private Q_SLOTS:
     void directWindowDeletionDestroysEditorUiControllerFirst();
     void closingWindowRestoresAllTabsAtNextStart();
     void snapshotRestoresTabsAfterShutdown();
+    void killedRunsDoNotMultiplyWindows();
 
 private:
     QTemporaryDir m_settingsDirectory;
@@ -219,6 +220,71 @@ void NotepadqqTest::snapshotRestoresTabsAfterShutdown()
     QVERIFY2(contents.contains("snapshot 0"), qPrintable(contents.join(" | ")));
     QVERIFY(contents.contains("snapshot 1"));
     QVERIFY(contents.contains("snapshot 2 and more"));
+
+    delete restored;
+    BackupService::clearBackupData();
+}
+
+// Every run that was killed used to leave its snapshot behind, and every snapshot became one more
+// window at the next start (four empty "new" windows after a few hangs). Windows with nothing to
+// restore must not come back, and restored snapshots must be deleted once they are re-saved.
+void NotepadqqTest::killedRunsDoNotMultiplyWindows()
+{
+    BackupService::clearBackupData();
+    QVERIFY(BackupService::ownsBackupData());
+    const QString backupDir = PersistentCache::backupDirPath();
+
+    // Three killed runs that only had an empty tab, one that had an unsaved note.
+    for (int i = 0; i < 3; i++) {
+        const QString dir = backupDir + QString("/window_%1").arg(1000 + i);
+        QVERIFY(QDir().mkpath(dir));
+        QFile f(dir + "/window.xml");
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Notepadqq/>\n");
+    }
+    const QString noteDir = backupDir + "/window_2000";
+    QVERIFY(QDir().mkpath(noteDir));
+    {
+        QFile cache(noteDir + "/new 1.123");
+        QVERIFY(cache.open(QIODevice::WriteOnly));
+        cache.write("unsaved note");
+        QFile f(noteDir + "/window.xml");
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(QString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Notepadqq><View>"
+                        "<Tab filePath=\"\" cacheFilePath=\"%1\" cursorX=\"0\" cursorY=\"0\" scrollX=\"0\" "
+                        "scrollY=\"0\" active=\"1\"/></View></Notepadqq>\n")
+                    .arg((noteDir + "/new 1.123").toHtmlEscaped())
+                    .toUtf8());
+    }
+
+    QVERIFY(BackupService::detectImproperShutdown());
+    const int windowsBefore = MainWindow::instances().size();
+    QVERIFY(BackupService::restoreFromBackup());
+    QCOMPARE(MainWindow::instances().size(), windowsBefore + 1);
+
+    MainWindow* restored = MainWindow::instances().back();
+    restored->setAttribute(Qt::WA_DeleteOnClose, false);
+    EditorTabWidget* tabs = restored->topEditorContainer()->tabWidget(0);
+    QTRY_VERIFY_WITH_TIMEOUT(tabs->count() == 1 && !tabs->editor(0)->isLoading, 10000);
+    QCOMPARE(tabs->editor(0)->value(), QString("unsaved note"));
+
+    // The empty snapshots are gone right away, the restored one after the next snapshot.
+    for (int i = 0; i < 3; i++)
+        QVERIFY(!QFileInfo::exists(backupDir + QString("/window_%1").arg(1000 + i)));
+    BackupService::executeBackup();
+    QVERIFY(!QFileInfo::exists(noteDir));
+    QDir dir(backupDir);
+    QCOMPARE(dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot).size(), 1);
+
+    // "Killed" again: the next start brings back exactly that one window.
+    delete restored;
+    QVERIFY(BackupService::restoreFromBackup());
+    QCOMPARE(MainWindow::instances().size(), windowsBefore + 1);
+    restored = MainWindow::instances().back();
+    restored->setAttribute(Qt::WA_DeleteOnClose, false);
+    tabs = restored->topEditorContainer()->tabWidget(0);
+    QTRY_VERIFY_WITH_TIMEOUT(tabs->count() == 1 && !tabs->editor(0)->isLoading, 10000);
+    QCOMPARE(tabs->editor(0)->value(), QString("unsaved note"));
 
     delete restored;
     BackupService::clearBackupData();

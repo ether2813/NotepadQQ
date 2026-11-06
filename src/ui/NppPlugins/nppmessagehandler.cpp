@@ -781,7 +781,7 @@ LRESULT NppPluginManager::handleNppMessage(UINT msg, WPARAM wParam, LPARAM lPara
             static_cast<size_t>(wParam));
     case NPPM_GETNPPSETTINGSDIRPATH:
         return lengthOrCopy(
-            QDir::toNativeSeparators(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)),
+            QDir::toNativeSeparators(Notepadqq::userConfigPath()),
             reinterpret_cast<wchar_t*>(lParam),
             static_cast<size_t>(wParam));
     case NPPM_GETSETTINGSONCLOUDPATH:

@@ -3,6 +3,7 @@
 
 #include <QSharedPointer>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 
 #include <set>
@@ -64,6 +65,12 @@ public:
      */
     static void executeBackup();
 
+    /**
+     * @brief Whether this process owns the snapshot folder (only one running instance does).
+     *        Only the owner restores snapshots at start-up.
+     */
+    static bool ownsBackupData();
+
 private:
     static QTimer s_autosaveTimer;
     static bool s_autosaveEnabled;
@@ -89,6 +96,12 @@ private:
      * @brief s_backupWindowData contains the WindowData at the time of the last backup.
      */
     static std::set<WindowData> s_backupWindowData;
+
+    /**
+     * @brief Snapshot folders restored at start-up. They are deleted once the restored windows
+     *        have snapshots of their own.
+     */
+    static QStringList s_restoredDirs;
 
     /**
      * @brief writeBackup Writes a backup of the given MainWindow into a unique location inside the backupCache

@@ -56,6 +56,17 @@ public:
     static const QString contributorsUrl;
     static const QString website;
     static QString copyright();
+
+    /**
+     * @brief Enables portable mode when "portable.txt" is next to the executable: settings,
+     *        sessions and snapshots are then stored in "<application folder>/settings".
+     *        Must be called after the application and organization names are set and before
+     *        any QSettings is used.
+     */
+    static void initPortableMode();
+    static bool isPortable();
+    /** Folder for user configuration files (themes, plugin configuration...). */
+    static QString userConfigPath();
     static QString appDataPath(QString fileName = QString());
     /** Path of Languages.json (language names, file extensions, Notepad++ mapping). */
     static QString languagesPath();

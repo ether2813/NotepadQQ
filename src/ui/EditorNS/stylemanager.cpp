@@ -137,7 +137,7 @@ QString StyleManager::dataPath()
 { return Notepadqq::appDataPath(QStringLiteral("npp")); }
 
 QString StyleManager::userThemesPath()
-{ return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) + QStringLiteral("/themes"); }
+{ return Notepadqq::userConfigPath() + QStringLiteral("/themes"); }
 
 void StyleManager::loadLanguages()
 {

@@ -6,6 +6,7 @@
 #include "include/EditorNS/stylemanager.h"
 #include "include/docengine.h"
 #include "include/mainwindow.h"
+#include "include/notepadqq.h"
 #include "include/topeditorcontainer.h"
 #include "nppdocking.h"
 #include "pefile.h"
@@ -192,7 +193,7 @@ QString NppPluginManager::userPluginsPath()
 QString NppPluginManager::pluginsConfigPath()
 {
     const QString path =
-        QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) + QStringLiteral("/plugins/Config");
+        Notepadqq::userConfigPath() + QStringLiteral("/plugins/Config");
     QDir().mkpath(path);
     return path;
 }

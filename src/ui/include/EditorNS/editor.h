@@ -147,6 +147,8 @@ public:
      *        redo). Used by the backup service to detect documents that need a new snapshot.
      */
     Q_INVOKABLE QtPromise::QPromise<int> getHistoryGeneration();
+    /** Number of changes made to the document so far (synchronous getHistoryGeneration()). */
+    int historyGeneration() const { return m_changeCounter; }
 
     /**
      * @brief Set the language to use for the editor.

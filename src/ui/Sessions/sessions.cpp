@@ -371,6 +371,28 @@ bool saveSession(DocEngine* docEngine, TopEditorContainer* editorContainer, QStr
     return true;
 }
 
+bool hasRestorableTabs(const QString& sessionPath)
+{
+    QFile file(sessionPath);
+    if (!file.open(QIODevice::ReadOnly))
+        return false;
+
+    SessionReader reader(file);
+    bool success = false;
+    const auto views = reader.readData(&success);
+    if (!success)
+        return false;
+
+    for (const auto& view : views) {
+        for (const TabData& tab : view.tabs) {
+            if ((!tab.filePath.isEmpty() && QFileInfo::exists(tab.filePath)) ||
+                (!tab.cacheFilePath.isEmpty() && QFileInfo::exists(tab.cacheFilePath)))
+                return true;
+        }
+    }
+    return false;
+}
+
 void loadSession(DocEngine* docEngine, TopEditorContainer* editorContainer, QString sessionPath)
 {
     QFile file(sessionPath);

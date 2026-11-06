@@ -161,6 +161,19 @@ jobs:
           if (Test-Path "$target\notepadqq.exe") { throw "notepadqq.exe still present after uninstall" }
           if (Test-Path $key) { throw "uninstall registry entry still present" }
 
+      # Only the portable download keeps its settings next to notepadqq.exe (the installer was
+      # built above, without this file).
+      - name: Enable portable mode
+        shell: pwsh
+        run: |
+          Copy-Item support_files/windows/portable.txt dist/Notepadqq/portable.txt
+          $env:QT_FORCE_STDERR_LOGGING = "1"
+          $p = Start-Process -FilePath dist/Notepadqq/notepadqq.exe -ArgumentList "--print-debug-info" -PassThru -Wait -RedirectStandardError portable-info.txt
+          Get-Content portable-info.txt
+          if (-not (Select-String -Path portable-info.txt -Pattern "Portable: yes" -Quiet)) { throw "portable mode is not active" }
+          if (-not (Test-Path dist/Notepadqq/settings)) { throw "portable settings folder was not created" }
+          Remove-Item -Recurse -Force dist/Notepadqq/settings
+
       - name: Package
         shell: pwsh
         run: |

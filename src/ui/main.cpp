@@ -74,6 +74,7 @@ int main(int argc, char* argv[])
 #endif
 
     QSettings::setDefaultFormat(QSettings::IniFormat);
+    Notepadqq::initPortableMode();
 
     NqqSettings::ensureBackwardsCompatibility();
     NqqSettings& settings = NqqSettings::getInstance();
